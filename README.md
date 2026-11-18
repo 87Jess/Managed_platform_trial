@@ -28,6 +28,30 @@ This is a tested foundation, not a complete production platform. Nothing has bee
 See [docs/deployment-plan.md](docs/deployment-plan.md) for missing architecture components,
 cost drivers and the approval checklist. **Do not deploy workloads until those gates are met.**
 
+## Repository Layout
+
+| Path | Contents |
+| --- | --- |
+| `managed_agents/` | Policy broker API, Entra auth, registry policy, Agent Engine runtime, source bundler, deployment console |
+| `managed_agents/web/` | Console frontend (served at `/static`) |
+| `examples/source-agent/` | Minimal custom agent to deploy through the console |
+| `registry/agents.json` | Agent/connector/model registry (disabled by default) |
+| `gateway/` | Kong OSS DB-less config and image |
+| `infra/` | Terraform foundation: VPC, PSC attachment, buckets, Artifact Registry, secrets, service accounts, optional Cloud Run gateway |
+| `tests/` | Unit tests (no cloud credentials needed) |
+| `docs/` | Console guide and deployment plans |
+
+## Deploying an Agent to GCP
+
+1. Provision the foundation: `terraform -chdir=infra plan`, review, then apply after approval.
+2. Copy the Terraform outputs into your environment: `network_attachment` →
+   `CONSOLE_NETWORK_ATTACHMENT`, an `agent_service_accounts` entry → `CONSOLE_RUNTIME_ACCOUNT`.
+3. `gcloud auth application-default login`, then set `CONSOLE_ALLOW_DEPLOY=1` and
+   `CONSOLE_SECURITY_REVIEW_APPROVED=1` once the security gates are met.
+4. `uv run python -m managed_agents.console`, pick a folder / GitHub commit / ZIP,
+   review the snapshot, approve, and the console creates the Agent Engine resource
+   and tracks the operation until it completes.
+
 ## Local Checks
 
 Python 3.12+ and `uv` are required:

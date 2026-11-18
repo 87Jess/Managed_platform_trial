@@ -59,12 +59,11 @@ class GoogleBackend:
     def read_object(self, connector: Connector, object_name: str) -> bytes:
         url = (f"https://storage.googleapis.com/storage/v1/b/{quote(connector.bucket, safe='')}/o/"
                f"{quote(object_name, safe='')}?alt=media")
-        with self.session() as client:
-            with client.get(url, timeout=30, stream=True) as response:
-                response.raise_for_status()
-                data = bytearray()
-                for chunk in response.iter_content(chunk_size=65536):
-                    data.extend(chunk)
-                    if len(data) > 1024 * 1024:
-                        raise BackendUnavailable("Object exceeds the 1 MiB read limit")
-                return bytes(data)
+        with self.session() as client, client.get(url, timeout=30, stream=True) as response:
+            response.raise_for_status()
+            data = bytearray()
+            for chunk in response.iter_content(chunk_size=65536):
+                data.extend(chunk)
+                if len(data) > 1024 * 1024:
+                    raise BackendUnavailable("Object exceeds the 1 MiB read limit")
+            return bytes(data)
