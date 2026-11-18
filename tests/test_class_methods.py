@@ -20,6 +20,7 @@ def test_data360_example_registers_its_real_signature():
     assert query["name"] == "query" and query["api_mode"] == ""
     assert set(query["parameters"]["properties"]) == {"message", "user_id", "history"}
     assert query["parameters"]["properties"]["message"] == {"type": "string"}
+    assert query["parameters"]["properties"]["history"] == {"type": "array", "items": {"type": "object"}}
     assert "required" not in query["parameters"]  # message also accepted as input/prompt
 
 
@@ -55,3 +56,10 @@ def test_falls_back_when_the_signature_cannot_be_read():
     assert methods("root_agent = make_agent()\n") == (DEFAULT_METHODS, False)
     assert methods("def broken(:\n") == (DEFAULT_METHODS, False)
     assert methods("class A:\n    pass\nroot_agent = A()\n") == (DEFAULT_METHODS, False)
+
+
+def test_every_array_has_items():
+    found, _ = methods("class A:\n    def query(self, tags: list, ids: list[int] | None = None): ...\nroot_agent = A()\n")
+    props = found[0]["parameters"]["properties"]
+    assert props["tags"] == {"type": "array", "items": {"type": "string"}}
+    assert props["ids"] == {"type": "array", "items": {"type": "integer"}}

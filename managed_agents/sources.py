@@ -153,15 +153,19 @@ def _annotation_schema(node) -> dict:
         parts = [side for side in (node.left, node.right)
                  if not (isinstance(side, ast.Constant) and side.value is None)]
         return _annotation_schema(parts[0]) if len(parts) == 1 else {}
+    item = None
     if isinstance(node, ast.Subscript):
         outer = node.value.id if isinstance(node.value, ast.Name) else getattr(node.value, "attr", "")
         if outer == "Optional":
             return _annotation_schema(node.slice)
+        item = node.slice.elts[0] if isinstance(node.slice, ast.Tuple) and node.slice.elts else node.slice
         node = node.value
     name = node.id if isinstance(node, ast.Name) else getattr(node, "attr", "")
     kind = {"str": "string", "int": "integer", "float": "number", "bool": "boolean", "dict": "object",
             "Dict": "object", "list": "array", "List": "array", "Mapping": "object",
             "Sequence": "array"}.get(name)
+    if kind == "array":  # Agent Engine (OpenAPI) schemas need items on every array
+        return {"type": "array", "items": _annotation_schema(item) or {"type": "string"}}
     return {"type": kind} if kind else {}
 
 

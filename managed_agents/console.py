@@ -1,5 +1,6 @@
 import argparse
 import base64
+import dataclasses
 import hashlib
 import hmac
 import io
@@ -893,7 +894,17 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
             plan["status"] = "submitting"
             plan["approved_by"] = request.state.user
         try:
-            operation = cloud.submit(deployment_body(config, plan["input"], plan["bundle"]))
+            body = deployment_body(config, plan["input"], plan["bundle"])
+            try:
+                operation = cloud.submit(body)
+            except HTTPError as error:
+                # A 400 about the method schema read from source: deploy with query(message) instead.
+                code = error.response.status_code if error.response is not None else 0
+                if code != 400 or not plan["bundle"].methods_inferred or not re.search(
+                        r"class_?methods|parameters|schema", google_error(error), re.IGNORECASE):
+                    raise
+                plan["bundle"] = dataclasses.replace(plan["bundle"], class_methods=(), methods_inferred=False)
+                operation = cloud.submit(deployment_body(config, plan["input"], plan["bundle"]))
             with lock:
                 plan["operation"] = operation["name"]
                 plan["status"] = "deploying"
