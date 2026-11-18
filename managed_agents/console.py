@@ -76,10 +76,16 @@ class ConsoleConfig:
 
     @property
     def account(self):
+        """Runtime service account; "" means Agent Engine's default identity (CONSOLE_RUNTIME_ACCOUNT=default)."""
+        if self.runtime_account == "default":
+            return ""
         return self.runtime_account or f"agent-research@{self.project}.iam.gserviceaccount.com"
 
     @property
     def attachment(self):
+        """PSC network attachment; "" means no private networking (CONSOLE_NETWORK_ATTACHMENT=none)."""
+        if self.network_attachment == "none":
+            return ""
         return self.network_attachment or (
             f"projects/{self.project}/regions/{self.region}/networkAttachments/managed-agent-runtime")
 
@@ -146,9 +152,17 @@ class AgentEngineCloud:
         endpoints = [
             ("billing", f"https://cloudbilling.googleapis.com/v1/projects/{project}/billingInfo", "billingEnabled", True),
             ("vertex_api", f"https://serviceusage.googleapis.com/v1/projects/{project}/services/aiplatform.googleapis.com", "state", "ENABLED"),
-            ("runtime_account", f"https://iam.googleapis.com/v1/projects/{project}/serviceAccounts/{self.config.account}", "disabled", False),
-            ("psc_attachment", f"https://compute.googleapis.com/compute/v1/{self.config.attachment}", "name", None),
         ]
+        if self.config.account:
+            endpoints.append(("runtime_account", f"https://iam.googleapis.com/v1/projects/{project}/serviceAccounts/{self.config.account}", "disabled", False))
+        else:
+            checks.append({"id": "runtime_account", "status": "skipped",
+                           "message": "Using the Agent Engine default service agent (CONSOLE_RUNTIME_ACCOUNT=default)"})
+        if self.config.attachment:
+            endpoints.append(("psc_attachment", f"https://compute.googleapis.com/compute/v1/{self.config.attachment}", "name", None))
+        else:
+            checks.append({"id": "psc_attachment", "status": "skipped",
+                           "message": "No private networking (CONSOLE_NETWORK_ATTACHMENT=none)"})
         if self.config.sandbox_engine:
             engine_url = (f"https://{self.config.region}-aiplatform.googleapis.com/"
                           f"v1/{self.config.sandbox_engine}")
@@ -243,7 +257,6 @@ def deployment_body(config: ConsoleConfig, data: DeploymentInput, bundle: Bundle
         "displayName": data.display_name,
         "labels": {"managed-by": "agent-platform-console", "source-sha": bundle.digest[:63]},
         "spec": {
-            "serviceAccount": config.account,
             "agentFramework": bundle.framework,
             "sourceCodeSpec": {
                 "inlineSource": {"sourceArchive": base64.b64encode(bundle.archive).decode("ascii")},
@@ -258,10 +271,13 @@ def deployment_body(config: ConsoleConfig, data: DeploymentInput, bundle: Bundle
             "deploymentSpec": {
                 "minInstances": 0, "maxInstances": 2,
                 "resourceLimits": {"cpu": "1", "memory": "1Gi"},
-                "pscInterfaceConfig": {"networkAttachment": config.attachment},
             },
         },
     }
+    if config.account:
+        body["spec"]["serviceAccount"] = config.account
+    if config.attachment:
+        body["spec"]["deploymentSpec"]["pscInterfaceConfig"] = {"networkAttachment": config.attachment}
     if bundle.framework == "google-adk":
         body["spec"]["classMethods"] = [
             {"name": "async_create_session", "api_mode": "async", "parameters": {

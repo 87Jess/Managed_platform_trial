@@ -99,6 +99,23 @@ The minimal example is [examples/source-agent/agent.py](../examples/source-agent
 Select the repository's `examples/source-agent` folder, keep module `agent` / object `root_agent`,
 and enter an agent name to review it. This example echoes the provided message; it makes no LLM calls.
 
+## Quick PoC Deployment
+
+To demonstrate deployment before the platform's service account and private network exist,
+start the console with:
+
+```powershell
+$env:CONSOLE_ALLOW_DEPLOY="1"; $env:CONSOLE_SECURITY_REVIEW_APPROVED="1"
+$env:CONSOLE_RUNTIME_ACCOUNT="default"; $env:CONSOLE_NETWORK_ATTACHMENT="none"
+uv run python -m managed_agents.console
+```
+
+`default` runs the agent as the Agent Engine default service agent, which has Vertex AI access
+in the project; `none` omits the PSC interface, so the agent uses Agent Engine's standard
+networking. Neither matches the platform's security design: use this mode for demos only.
+The deployed agent appears in the Google Cloud console under Agent Engine
+(`https://console.cloud.google.com/vertex-ai/agents/agent-engines?project=PROJECT_ID`).
+
 ## Test in a GCP Sandbox
 
 Before deploying, a reviewed snapshot can be smoke-tested in a Google-managed

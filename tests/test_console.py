@@ -508,3 +508,27 @@ def test_iap_verifier_checks_issuer_and_audience(monkeypatch):
     monkeypatch.setattr(id_token, "verify_token", lambda *a, **k: {
         "iss": "https://cloud.google.com/iap", "email": "a@example.com"})
     assert verify_iap_assertion("token", IAP_AUDIENCE)["email"] == "a@example.com"
+
+
+def test_poc_mode_omits_runtime_account_and_private_networking(tmp_path):
+    from managed_agents.console import DeploymentInput, deployment_body
+    from managed_agents.sources import bundle_source
+
+    config = ConsoleConfig(source_root=tmp_path, project="example-project",
+                           runtime_account="default", network_attachment="none")
+    bundle = bundle_source({"agent.py": b"root_agent = object()", "requirements.txt": b""},
+                           "agent", "requirements.txt")
+    body = deployment_body(config, DeploymentInput(source_kind="zip", location="x",
+                                                   display_name="Agent"), bundle)
+    assert "serviceAccount" not in body["spec"]
+    assert "pscInterfaceConfig" not in body["spec"]["deploymentSpec"]
+    session = MagicMock()
+    session.__enter__.return_value = session
+    session.get.return_value.status_code = 200
+    session.get.return_value.json.return_value = {"billingEnabled": True, "state": "ENABLED"}
+    cloud = AgentEngineCloud(config)
+    cloud.session = lambda: session
+    statuses = {item["id"]: item["status"] for item in cloud.preflight()["checks"]}
+    assert statuses["runtime_account"] == "skipped"
+    assert statuses["psc_attachment"] == "skipped"
+    assert session.get.call_count == 2

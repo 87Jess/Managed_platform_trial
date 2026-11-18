@@ -283,7 +283,7 @@ async function initialize() {
   try {
     state.config = await api("/api/config");
     const config = state.config;
-    setText("target-project", config.project); setText("target-region", config.region); setText("allowed-root", config.source_root); setText("runtime-account", config.runtime_account);
+    setText("target-project", config.project); setText("target-region", config.region); setText("allowed-root", config.source_root); setText("runtime-account", config.runtime_account || "Agent Engine default service agent");
     byId("local-path").placeholder = config.source_root;
     if (!config.local_sources_enabled) {
       const local = document.querySelector('input[name="source-kind"][value="local"]');
@@ -292,7 +292,7 @@ async function initialize() {
       selectSource("github");
     }
     byId("submission-state").replaceChildren(Object.assign(document.createElement("span"), { className: `status-dot${config.deployment_enabled ? "" : " warning"}` }), document.createTextNode(config.deployment_enabled ? "Enabled" : "Locked"));
-    const details = { ...(config.hosted ? { "Hosted on": "Cloud Run (Identity-Aware Proxy)", "Signed in as": config.user } : {}), "Project": config.project, "Region": config.region, ...(config.local_sources_enabled ? { "Allowed source root": config.source_root } : {}), "Runtime service account": config.runtime_account, "PSC attachment": config.network_attachment, "Cloud submission": config.deployment_enabled ? "Enabled" : "Locked", "Sandbox host engine": config.sandbox_engine || "Not configured", "Sandbox testing": config.sandbox_enabled ? (config.sandbox_required ? "Required before deploy" : "Enabled") : "Disabled" };
+    const details = { ...(config.hosted ? { "Hosted on": "Cloud Run (Identity-Aware Proxy)", "Signed in as": config.user } : {}), "Project": config.project, "Region": config.region, ...(config.local_sources_enabled ? { "Allowed source root": config.source_root } : {}), "Runtime service account": config.runtime_account || "Agent Engine default service agent", "PSC attachment": config.network_attachment || "None (public Agent Engine networking)", "Cloud submission": config.deployment_enabled ? "Enabled" : "Locked", "Sandbox host engine": config.sandbox_engine || "Not configured", "Sandbox testing": config.sandbox_enabled ? (config.sandbox_required ? "Required before deploy" : "Enabled") : "Disabled" };
     byId("environment-details").replaceChildren(...Object.entries(details).map(([label, value]) => { const row = document.createElement("div"); const term = document.createElement("dt"); term.textContent = label; const description = document.createElement("dd"); description.textContent = value; row.append(term, description); return row; }));
     updateApproval();
     await refreshHistory();
