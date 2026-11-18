@@ -429,3 +429,5 @@ dialog.drawer[open]{display:flex;animation:drawer-in 250ms var(--ease-out) both}
 .schema{margin-top:10px}
 .schema>summary{cursor:pointer;color:var(--ink-3);font-weight:600}
 .schema .terminal.light{margin:8px 0 0;max-height:200px}
+.bubble.agent .text{white-space:pre-wrap;overflow-wrap:anywhere}
+.bubble.agent .text.json{font:12px/1.6 var(--mono);background:var(--ground);color:var(--ink-2);box-shadow:inset 0 0 0 1px var(--rule)}

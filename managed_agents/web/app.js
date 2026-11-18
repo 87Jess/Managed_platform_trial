@@ -533,12 +533,62 @@ function bubble(kind, text) {
   byId("test-transcript").append(item); byId("test-transcript").scrollTop = byId("test-transcript").scrollHeight;
   return item;
 }
+// A suggestion is either text to send, or { label, input, send } that replaces the input JSON.
 function setSuggestions(prompts) {
   byId("test-suggestions").replaceChildren(...prompts.map((prompt) => {
-    const chip = el("button", "press", prompt); chip.type = "button";
-    chip.addEventListener("click", () => { byId("test-message").value = prompt; byId("test-form").requestSubmit(); });
+    const label = typeof prompt === "string" ? prompt : prompt.label;
+    const chip = el("button", "press", label); chip.type = "button";
+    chip.addEventListener("click", () => {
+      if (typeof prompt === "string") { byId("test-message").value = prompt; byId("test-form").requestSubmit(); return; }
+      byId("test-input").value = JSON.stringify(prompt.input, null, 2);
+      byId("test-message").value = label;
+      if (prompt.send) { byId("test-form").requestSubmit(); return; }
+      byId("test-form").querySelector(".advanced").open = true;
+      bubble("system", prompt.note || "Fill in the values in the input JSON, then press Send.");
+      byId("test-input").focus();
+    });
     return chip;
   }));
+}
+
+// Pull example JSON objects out of an agent's error text, e.g. 'Send JSON: {"action":"list_tools"}'.
+function examplesFromError(message) {
+  const text = message.replaceAll('\\"', '"');
+  const found = [];
+  for (let start = text.indexOf("{"); start !== -1 && found.length < 4; start = text.indexOf("{", start + 1)) {
+    let depth = 0;
+    for (let end = start; end < text.length; end += 1) {
+      if (text[end] === "{") depth += 1;
+      else if (text[end] === "}" && --depth === 0) {
+        try {
+          const value = JSON.parse(text.slice(start, end + 1));
+          if (value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length && !("detail" in value) && !found.some((item) => JSON.stringify(item) === JSON.stringify(value))) found.push(value);
+        } catch { /* not JSON */ }
+        break;
+      }
+    }
+  }
+  return found;
+}
+const looksLikePlaceholder = (value) => typeof value === "string" && /^[A-Z][A-Z0-9_]{2,}$/.test(value);
+function exampleChip(example) {
+  const values = Object.values(example);
+  const needsEditing = values.some(looksLikePlaceholder) || values.some((value) => value && typeof value === "object" && !Object.keys(value).length);
+  const label = Object.values(example).find((value) => typeof value === "string" && !looksLikePlaceholder(value)) || JSON.stringify(example);
+  return { label: needsEditing ? `${label} …` : label, input: example, send: !needsEditing,
+    note: "Replace the placeholder values (like TOOL_NAME) in the input JSON, then press Send." };
+}
+
+// Tool servers answer list_tools with a list of tools: offer a ready-made call for each.
+function toolChips(output) {
+  const tools = Array.isArray(output?.tools) ? output.tools : Array.isArray(output) ? output : null;
+  if (!tools) return [];
+  return tools.filter((tool) => tool && typeof tool.name === "string").slice(0, 6).map((tool) => {
+    const schema = tool.inputSchema || tool.input_schema || tool.parameters || {};
+    const args = Object.fromEntries(Object.keys(schema.properties || {}).map((key) => [key, ""]));
+    return { label: `Call ${tool.name}`, input: { action: "call_tool", name: tool.name, arguments: args },
+      note: Object.keys(args).length ? `Fill in the arguments for ${tool.name} (${Object.keys(args).join(", ")}), then press Send.` : `Add any arguments ${tool.name} needs, then press Send.` };
+  });
 }
 function openTester(agent) {
   tester.agent = agent; tester.session = "";
@@ -729,7 +779,7 @@ byId("test-form").addEventListener("submit", async (event) => {
   if (!message || tester.busy) return;
   let template;
   try { template = JSON.parse(byId("test-input").value || "{}"); } catch { bubble("error", "The input JSON under “Method & input” isn't valid JSON."); return; }
-  tester.busy = true; byId("test-send").disabled = true; setSuggestions([]);
+  tester.busy = true; byId("test-send").disabled = true;
   bubble("user", message); byId("test-message").value = ""; autosize();
   const typing = el("div", "typing"); typing.setAttribute("aria-label", "The agent is responding"); typing.append(el("i"), el("i"), el("i"));
   byId("test-transcript").append(typing); byId("test-transcript").scrollTop = byId("test-transcript").scrollHeight;
@@ -749,13 +799,21 @@ byId("test-form").addEventListener("submit", async (event) => {
       card.append(summary, el("pre", "", `${call.data}${result ? `\n→ ${result.data}` : ""}`));
       reply.append(card);
     }
-    reply.append(el("div", "text", data.reply || (data.output !== undefined ? JSON.stringify(data.output, null, 2) : "(no text in the response)")));
+    const structured = !data.reply && data.output !== undefined && data.output !== null && typeof data.output === "object";
+    reply.append(el("div", structured ? "text json" : "text", data.reply || (data.output !== undefined ? JSON.stringify(data.output, null, 2) : "(no text in the response)")));
+    const chips = toolChips(data.output);
+    setSuggestions(chips);
     const footer = el("div", "footer"); const raw = el("details", "raw");
     raw.append(el("summary", "", `${((performance.now() - started) / 1000).toFixed(1)}s${data.event_count ? ` · ${data.event_count} events` : ""} · raw response`), el("pre", "", JSON.stringify(data.events || data.output, null, 2)));
     footer.append(raw); reply.append(footer); icons();
   } catch (error) {
     typing.remove(); bubble("error", error.message);
-    if (/Send JSON|INVALID_ARGUMENT|missing|required|unexpected keyword|argument/i.test(error.message)) {
+    const examples = examplesFromError(error.message);
+    if (examples.length) {
+      setSuggestions(examples.map(exampleChip));
+      bubble("system", "This agent expects structured input, not a chat message. Pick one of its own examples below to try it.");
+    }
+    if (!examples.length && /Send JSON|INVALID_ARGUMENT|missing|required|unexpected keyword|argument/i.test(error.message)) {
       byId("test-form").querySelector(".advanced").open = true;
       bubble("system", "The agent didn't accept that input. Its expected input is under “Method & input”: adjust the JSON (your text replaces {message}) and send again.");
     }
