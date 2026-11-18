@@ -186,7 +186,7 @@ def test_answers_even_when_the_data_server_is_unreachable():
     agent, _ = agent_with(model, Down())
     result = agent.query(message="GDP of India?")
     assert result["reply"].startswith("I can't reach")
-    assert "ConnectError" in result["tools_unavailable"]
+    assert result["tools_unavailable"].startswith("ConnectError")
     assert model.tools is None  # no tools bound
     assert "unavailable right now" in model.seen[0][0].content
 
@@ -198,3 +198,21 @@ def test_history_is_passed_to_the_model():
                                                  {"role": "assistant", "content": "3.9 trillion US$ in 2024."}])
     sent = model.seen[0]
     assert [message.type for message in sent] == ["system", "human", "ai", "human"]
+
+
+def test_network_diagnosis_tells_private_from_public(monkeypatch):
+    import socket
+
+    def resolve(addresses):
+        return lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 443)) for a in addresses]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve(["10.1.2.3"]))
+    assert "only to private" in data360.network_diagnosis()
+    monkeypatch.setattr(socket, "getaddrinfo", resolve(["20.1.2.3"]))
+    assert "no outbound internet route" in data360.network_diagnosis()
+
+    def fail(*args, **kwargs):
+        raise socket.gaierror("Name or service not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", fail)
+    assert "DNS lookup" in data360.network_diagnosis()

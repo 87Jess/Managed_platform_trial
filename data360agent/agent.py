@@ -168,6 +168,24 @@ class Data360MCPClient:
         return result
 
 
+def network_diagnosis(url: str = MCP_ENDPOINT) -> str:
+    """Where the MCP host resolves from inside the runtime: tells DNS, private-only and egress problems apart."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    host = urlparse(url).hostname or ""
+    try:
+        addresses = sorted({info[4][0] for info in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)})
+    except OSError as error:
+        return f"DNS lookup for {host} failed: {error}"
+    private = [address for address in addresses if not ipaddress.ip_address(address).is_global]
+    verdict = ("resolves only to private addresses, so it is reachable only from a private network"
+               if private and len(private) == len(addresses) else
+               "resolves to public addresses, so the runtime has no outbound internet route")
+    return f"{host} -> {', '.join(addresses[:4])}: {verdict}"
+
+
 # ---------------------------------------------------------------- tools for Gemini
 
 _SCHEMA_KEYS = {"type", "description", "enum", "items", "properties", "required", "format", "nullable"}
@@ -344,7 +362,10 @@ class Data360Agent:
             try:
                 definitions, names = gemini_tools(self._catalog(client))
             except (MCPError, httpx.HTTPError) as error:
-                definitions, names, unavailable = [], {}, f"{type(error).__name__}: {error}"[:300]
+                definitions, names = [], {}
+                unavailable = f"{type(error).__name__}: {error}"[:300]
+                if isinstance(error, httpx.TransportError):
+                    unavailable += f" [{network_diagnosis()}]"
             model = self._model(model_name).bind_tools(definitions) if definitions else self._model(model_name)
             system = SYSTEM_PROMPT + (TOOLS_DOWN_NOTE if unavailable else "")
 
