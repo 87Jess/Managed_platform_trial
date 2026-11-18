@@ -1,62 +1,59 @@
-# Data360 MCP Agent
+# Data360 agent (LangGraph + Gemini)
 
-This is a custom Python agent source folder for the managed-agent console. It connects to
-the World Bank Data360 MCP endpoint over HTTPS and supports natural-language questions
-using an LLM accessed exclusively through the existing governed platform model gateway.
-It also preserves the explicit JSON tool-command interface.
+Answers questions about World Bank development data in plain language, e.g. "What is the GDP
+of India?". A LangGraph loop lets Gemini on Vertex AI pick tools from the
+[Data360 MCP server](https://maimcpext.worldbank.org/ext/data360/mcp), calls them, and writes
+a short answer with units, year and source.
 
-## Conversational mode
-
-Configure these non-secret environment variables on the Agent Engine runtime before deployment:
-
-| Variable | Value |
-| --- | --- |
-| `DATA360_GATEWAY_URL` | Approved HTTPS gateway origin, without a path |
-| `DATA360_AGENT_ID` | Enabled agent ID from the gateway registry (not the display name) |
-| `DATA360_MODEL_ALIAS` | Enabled model alias granted to that agent |
-
-The checked-in platform registry is disabled by default and has no Data360 agent entry.
-An operator must configure/approve those grants separately. This project does not enable them,
-grant IAM permissions, deploy resources, or bypass authentication automatically.
-
-Call the agent through the platform's authenticated `/v1/agents/{id}/invoke` endpoint.
-It forwards `user_id`, `authorization` and `app_token` per invocation, as required by
-`query(message, user_id="", authorization="", app_token="")`. Never embed credentials in
-source, runtime environment variables, model prompts, MCP arguments, or chat messages.
-A direct console/Agent Engine call that supplies only `message` cannot use the governed model.
-Missing settings or credentials fail with an explicit configuration/authentication error.
-
-Messages such as `Hi! What can you do?` and `Find GDP indicators for India` enter the
-conversational workflow. The model sees the tool catalog, requests individual input schemas,
-selects tools, and summarizes their results. Each query is stateless and limited to eight
-model steps. The gateway's 16000-character input limit is enforced; if a result exceeds the
-budget, request fewer observations rather than silently truncating data. MCP errors are
-shown to the model as errors, and transport/authentication/model-format failures propagate.
-
-The small gateway adapter in `chat.py` follows the platform's `PlatformClient` HTTPS,
-credential-forwarding, timeout and redirect conventions. It is included locally because the
-console uploads this source folder alone, without the parent `managed_agents` package.
-The existing gateway accepts text prompts, so model actions use a strict JSON protocol rather
-than native model function-calling APIs.
-
-## Explicit tool mode
-
-JSON commands work without model configuration or model credentials. First list tools, then
-call a specific tool by name with its documented arguments:
-
-```json
-{"action": "list_tools"}
+```text
+question ─► Gemini (tools bound) ─► tool calls? ──yes──► Data360 MCP tools ─┐
+                 ▲                        │no                                │
+                 └──────── results ───────┼◄────────────────────────────────┘
+                                          ▼
+                                       answer
 ```
 
-```json
-{"action": "call_tool", "name": "TOOL_NAME", "arguments": {}}
+## Deploy with the console
+
+1. **Ship** → Local folder `data360agent` (or zip this folder).
+2. Framework **Custom Python**, entrypoint `agent` / `root_agent`, dependencies `requirements.txt`.
+3. Review, approve, deploy. Then **Chat** from the Agent garden and ask a question.
+
+The agent uses its own Agent Engine identity for Vertex AI, so there is no API key or gateway
+token. The identity needs permission to call Gemini (`roles/aiplatform.user`; the Agent Engine
+default service agent normally has it) and the runtime needs outbound HTTPS to
+`maimcpext.worldbank.org` (public networking, or a PSC route that allows it).
+
+## Configuration (environment variables, all optional)
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DATA360_MODEL` | `gemini-2.5-flash` | Gemini model on Vertex AI |
+| `DATA360_FALLBACK_MODEL` | `gemini-3-flash-preview` | Used if the first model is not found (e.g. retired) |
+| `DATA360_LOCATION` | `global` | Vertex AI location for the model |
+| `GOOGLE_CLOUD_PROJECT` | project of the credentials | Project billed for Gemini calls |
+
+## Inputs
+
+* `query(message="What is the GDP of India?")` → `{"reply": ..., "tools_used": [...], "model": ...}`
+* `input=`, `prompt=` or `question=` work too, for callers that use those names.
+* Optional `history=[{"role": "user"|"assistant", "content": "..."}]` for multi-turn context.
+* JSON commands for debugging: `{"action": "list_tools"}` or
+  `{"action": "call_tool", "name": "TOOL", "arguments": {...}}` sent as the message.
+
+If the Data360 server can't be reached (for example the runtime has no outbound internet),
+the agent still replies, says it can't fetch data, and adds `tools_unavailable` with the reason;
+the console shows that reason above the reply. The console's Chat also sends earlier turns as
+`history`, so follow-up questions ("and in 2023?") work.
+
+Tool results are treated as data, capped at 12,000 characters each, and the loop stops after
+8 tool rounds with a request to narrow the question.
+
+## Tests
+
+```bash
+pip install -r data360agent/requirements.txt pytest
+python -m pytest tests/test_data360_agent.py
 ```
 
-Select this folder in the console, choose the **custom Python agent** framework, and use
-module `agent` and object `root_agent`. The runtime needs outbound HTTPS access to
-`maimcpext.worldbank.org` and to the approved model gateway. Do not send secrets or sensitive
-personal data to the MCP server.
-
-After changing source, create and review a new snapshot and redeploy; the existing deployment
-continues running the old immutable source. Include `chat.py` in the reviewed files.
-No new Python dependencies are required.
+They run offline with a scripted model and a fake MCP server.

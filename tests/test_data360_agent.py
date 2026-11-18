@@ -1,7 +1,7 @@
-"""Offline tests for examples/data360-agent (LangGraph + Gemini + Data360 MCP).
+"""Offline tests for data360agent (LangGraph + Gemini + Data360 MCP).
 
 Skipped unless the agent's own dependencies are installed:
-    pip install -r examples/data360-agent/requirements.txt
+    pip install -r data360agent/requirements.txt
 """
 
 import importlib.util
@@ -15,7 +15,7 @@ pytest.importorskip("langchain_google_genai")
 
 from langchain_core.messages import AIMessage
 
-AGENT_PATH = Path(__file__).resolve().parents[1] / "examples" / "data360-agent" / "agent.py"
+AGENT_PATH = Path(__file__).resolve().parents[1] / "data360agent" / "agent.py"
 spec = importlib.util.spec_from_file_location("data360_agent", AGENT_PATH)
 data360 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(data360)

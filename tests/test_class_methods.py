@@ -13,7 +13,7 @@ def methods(source: str, extra: dict[str, bytes] | None = None):
 
 
 def test_data360_example_registers_its_real_signature():
-    files = {"agent.py": (ROOT / "examples/data360-agent/agent.py").read_bytes()}
+    files = {"agent.py": (ROOT / "data360agent/agent.py").read_bytes()}
     found, inferred = infer_class_methods(files, "agent", "root_agent")
     assert inferred
     query = found[0]
