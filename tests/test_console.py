@@ -1,5 +1,6 @@
 import base64
 import io
+import json
 import re
 import tarfile
 from unittest.mock import MagicMock
@@ -532,3 +533,64 @@ def test_poc_mode_omits_runtime_account_and_private_networking(tmp_path):
     assert statuses["runtime_account"] == "skipped"
     assert statuses["psc_attachment"] == "skipped"
     assert session.get.call_count == 2
+
+
+def google_http_error(code, status, message):
+    response = Response()
+    response.status_code = code
+    response._content = json.dumps({"error": {"code": code, "status": status,
+                                              "message": message}}).encode()
+    return HTTPError("detail", response=response)
+
+
+def test_status_check_failure_keeps_deploying_and_explains(console, monkeypatch):
+    client, cloud, source = console
+    plan = plan_for(client, source)
+    approve(client, plan)
+    def denied(name):
+        raise google_http_error(403, "PERMISSION_DENIED", "Permission 'aiplatform.operations.get' denied")
+    monkeypatch.setattr(cloud, "status", denied)
+    response = client.get(f"/api/plans/{plan['id']}")
+    assert response.status_code == 200
+    result = response.json()
+    assert result["status"] == "deploying"
+    assert "HTTP 403" in result["status_check"]
+    assert "PERMISSION_DENIED" in result["status_check"]
+    monkeypatch.setattr(cloud, "status", FakeCloud().status)
+    result = client.get(f"/api/plans/{plan['id']}").json()
+    assert result["status"] == "succeeded"
+    assert result["status_check"] == ""
+    assert result["completed_at"] >= result["submitted_at"] > 0
+
+
+def test_operation_failure_reports_google_message(console, monkeypatch):
+    client, cloud, source = console
+    monkeypatch.setattr(cloud, "status", lambda name: {
+        "done": True, "error": {"code": 3, "message": "Build failed: No module named 'google.adk'"}})
+    plan = plan_for(client, source)
+    approve(client, plan)
+    result = client.get(f"/api/plans/{plan['id']}").json()
+    assert result["status"] == "failed"
+    assert "No module named 'google.adk'" in result["message"]
+
+
+def test_rejected_submission_includes_google_reason(console, monkeypatch):
+    client, cloud, source = console
+    def reject(body):
+        raise google_http_error(400, "INVALID_ARGUMENT", "sourceCodeSpec is invalid")
+    monkeypatch.setattr(cloud, "submit", reject)
+    result = approve(client, plan_for(client, source)).json()
+    assert result["status"] == "failed"
+    assert "INVALID_ARGUMENT: sourceCodeSpec is invalid" in result["message"]
+
+
+def test_plan_warns_about_framework_and_missing_adk_dependency(console):
+    client, _, _ = console
+    archive = make_zip({"agent.py": "from google.adk.agents import LlmAgent\nroot_agent = None",
+                        "requirements.txt": "requests\n"})
+    for framework, expected in [("custom", "Choose the Google ADK framework"),
+                                ("google-adk", "google-cloud-aiplatform")]:
+        upload_id = client.post("/api/uploads", content=archive).json()["id"]
+        plan = client.post("/api/plans", json={"source_kind": "zip", "location": upload_id,
+                                               "display_name": "Weather", "framework": framework}).json()
+        assert any(expected in warning for warning in plan["warnings"]), plan["warnings"]

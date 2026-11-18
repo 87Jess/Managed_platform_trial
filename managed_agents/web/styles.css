@@ -13,3 +13,59 @@
 .sandbox-section{display:grid;gap:10px;margin:14px 0}
 .sandbox-section .button{justify-self:start}
 .sandbox-log{max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;margin:8px 0 0;padding:8px;border-radius:6px;background:rgba(127,127,127,.12)}
+
+/* ---- Redesign: readiness, progress, alerts, results ---- */
+.page-lede{color:var(--muted);font-size:13px;margin-top:6px;max-width:640px}
+.readiness{background:#fff;border:1px solid var(--line);border-radius:8px;padding:18px 20px;margin-bottom:24px}
+.readiness-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}
+.readiness-head h2{font-size:15px}
+.readiness-sub{display:block;color:var(--muted);font-size:11px;margin-top:2px}
+.readiness-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.tile{background:#f7f9f8;border:1px solid #edf1ee;border-radius:6px;padding:11px 12px;min-width:0}
+.tile strong{font-size:12px;font-weight:500;display:flex;gap:6px;align-items:center;overflow-wrap:anywhere;line-height:1.45}
+.tile strong svg{width:13px;height:13px;color:#74867b}
+.tile .mono{font-family:'Cascadia Code',Consolas,monospace;font-size:11px}
+.check-list{list-style:none;margin:14px 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px}
+.check-list li{display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:6px;padding:9px 11px;font-size:11px;min-width:0}
+.check-list li strong{display:block;font-weight:500}
+.check-list li span{display:block;color:var(--muted);overflow-wrap:anywhere;margin-top:2px}
+.check-list li svg{width:16px;height:16px;margin-top:1px}
+.check-list .passed svg{color:#20a575}.check-list .skipped svg{color:#8b9b91}
+.check-list .blocked svg,.check-list .missing svg{color:var(--red)}.check-list .unknown svg{color:#c29030}
+.check-list .note{grid-column:1/-1;border:0;padding:2px 0;color:var(--muted)}
+
+.progress-steps{list-style:none;display:flex;margin:18px 0 6px;padding:0;counter-reset:step}
+.progress-steps li{flex:1;position:relative;text-align:center;font-size:10px;color:#9aa99e;padding-top:26px;min-width:0}
+.progress-steps li::before{content:counter(step);counter-increment:step;position:absolute;top:0;left:50%;transform:translateX(-50%);width:20px;height:20px;border-radius:50%;border:1.5px solid #cfdad3;background:#fff;display:grid;place-items:center;font-size:10px;font-weight:600;color:#9aa99e;z-index:1}
+.progress-steps li::after{content:"";position:absolute;top:10px;left:calc(-50% + 12px);right:calc(50% + 12px);height:1.5px;background:#dfe7e2}
+.progress-steps li:first-child::after{display:none}
+.progress-steps li.done{color:#2c8551}.progress-steps li.done::before{content:"\2713";background:#2c8551;border-color:#2c8551;color:#fff}
+.progress-steps li.done::after,.progress-steps li.current::after{background:#2c8551}
+.progress-steps li.current{color:var(--ink);font-weight:600}.progress-steps li.current::before{border-color:var(--green);color:var(--green);box-shadow:0 0 0 3px #087f5b1a}
+.progress-steps li.failed{color:var(--red)}.progress-steps li.failed::before{content:"!";border-color:var(--red);color:var(--red)}
+.progress-steps li.skipped::before{content:"\2013"}
+
+.plan-alerts{display:grid;gap:8px;margin:12px 0 4px}
+.alert{display:flex;gap:9px;border-radius:6px;padding:10px 12px;font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+.alert svg{width:15px;height:15px;margin-top:1px}
+.alert.warning{background:#fcf6e8;border:1px solid #f0dfb4;color:#7d5a12}
+.alert.error{background:#fff3f1;border:1px solid #edc9c4;color:var(--red)}
+.alert.info{background:#eef5fb;border:1px solid #d4e5f3;color:#2f5f86}
+
+.success-panel{border:1px solid #cfe7d8;background:#f3faf6;border-radius:8px;padding:14px;margin:14px 0}
+.success-head{display:flex;gap:10px;align-items:flex-start;color:#2c8551;margin-bottom:6px}
+.success-head svg{width:22px;height:22px}
+.success-head strong{display:block;font-size:13px}
+.success-head span{display:block;font-size:11px;color:#5d7f69;margin-top:2px}
+.copy-row{display:flex;align-items:flex-start;gap:6px;background:#fff;border:1px solid #dcebe2;border-radius:5px;padding:7px 8px}
+.copy-row code{flex:1;font-size:10px;color:#3f5e4a;min-width:0}
+.open-cloud{width:100%;margin:12px 0 4px}
+.success-panel .file-details{margin:10px 0 0;background:#fff}
+.snippet-row{border:0;border-top:1px solid #eef3ef;border-radius:0}
+.snippet{flex:1;margin:0;font:11px/1.55 'Cascadia Code',Consolas,monospace;white-space:pre;overflow:auto;color:#2c4235;min-width:0}
+.history-link{display:inline-flex;align-items:center;gap:4px;color:var(--green)}
+.history-link svg{width:12px;height:12px}
+td.resource-cell{color:#8b9b91}
+
+@media(max-width:1100px){.readiness-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:600px){.readiness-grid{grid-template-columns:1fr 1fr}.readiness-head{flex-direction:column;align-items:flex-start}}

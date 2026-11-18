@@ -8,6 +8,35 @@ const sourceNames = { local: "Local folder", github: "GitHub", zip: "ZIP upload"
 const sourceIcons = { local: "folder", github: "github", zip: "file-archive" };
 const sandboxNames = { not_run: "GCP sandbox test not run", running: "Testing in GCP sandbox", passed: "Sandbox test passed", failed: "Sandbox test failed", error: "Sandbox test could not run" };
 
+function cloudConsoleUrl(project) { return `https://console.cloud.google.com/vertex-ai/agents/agent-engines?project=${encodeURIComponent(project)}`; }
+function duration(seconds) { const s = Math.max(0, Math.round(seconds)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`; }
+function alertBox(kind, text) {
+  const box = document.createElement("div"); box.className = `alert ${kind}`;
+  const message = document.createElement("span"); message.textContent = text;
+  box.append(icon(kind === "error" ? "circle-alert" : kind === "warning" ? "triangle-alert" : "info"), message); return box;
+}
+
+function progressSteps(plan) {
+  const sandbox = plan.sandbox?.status || "not_run";
+  const sandboxState = sandbox === "passed" ? "done" : ["failed", "error"].includes(sandbox) ? "failed" : sandbox === "running" ? "current" : plan.status === "planned" ? "" : "skipped";
+  const deployFailed = ["failed", "unknown"].includes(plan.status);
+  return [
+    ["Snapshot", "done"],
+    ["Sandbox test", sandboxState],
+    ["Approve", plan.status === "planned" ? (sandbox === "running" ? "" : "current") : "done"],
+    ["Deploy", plan.status === "planned" ? "" : ["submitting", "deploying"].includes(plan.status) ? "current" : deployFailed ? "failed" : "done"],
+    ["Live", plan.status === "succeeded" ? "done" : ""],
+  ];
+}
+
+function querySnippet(plan) {
+  const head = `import vertexai\n\nclient = vertexai.Client(project="${plan.project}", location="${plan.region}")\nagent = client.agent_engines.get(name="${plan.resource}")\n`;
+  if (plan.framework === "google-adk") {
+    return `import asyncio\n${head}\nasync def main():\n    async for event in agent.async_stream_query(user_id="demo", message="Hello"):\n        print(event)\n\nasyncio.run(main())`;
+  }
+  return `${head}print(agent.query(message="Hello"))`;
+}
+
 function icons() { if (globalThis.lucide) globalThis.lucide.createIcons(); }
 function setText(id, value) { byId(id).textContent = value; }
 function readableBytes(value) { return value < 1024 ? `${value} B` : value < 1048576 ? `${(value / 1024).toFixed(1)} KiB` : `${(value / 1048576).toFixed(2)} MiB`; }
@@ -110,15 +139,30 @@ function showPlan(plan, resetApproval = false) {
     const size = document.createElement("span"); size.textContent = readableBytes(file.bytes);
     row.append(name, size); return row;
   }));
+  byId("progress-steps").replaceChildren(...progressSteps(plan).map(([label, stepState]) => { const item = document.createElement("li"); item.textContent = label; if (stepState) item.className = stepState; return item; }));
+  const alerts = [];
+  if (plan.status === "failed") alerts.push(alertBox("error", plan.message));
+  else if (plan.status === "unknown") alerts.push(alertBox("warning", plan.message));
+  if (plan.status_check) alerts.push(alertBox("warning", `${plan.status_check}. The deployment may still be running in Google Cloud.`));
+  for (const warning of plan.warnings || []) alerts.push(alertBox("warning", warning));
+  byId("plan-alerts").replaceChildren(...alerts);
+  const live = plan.status === "succeeded" && Boolean(plan.resource);
+  byId("success-panel").hidden = !live;
+  if (live) {
+    setText("resource-name", plan.resource);
+    setText("success-meta", `${plan.display_name} in ${plan.project} / ${plan.region}${plan.completed_at && plan.submitted_at ? ` - built in ${duration(plan.completed_at - plan.submitted_at)}` : ""}`);
+    byId("open-cloud").href = cloudConsoleUrl(plan.project);
+    setText("query-snippet", querySnippet(plan));
+  }
   const active = ["submitting", "deploying"].includes(plan.status);
   byId("status-icon").replaceChildren(icon(active ? "loader-circle" : plan.status === "failed" ? "circle-alert" : "circle-check", active));
   setText("status-title", statusNames[plan.status]);
-  setText("status-message", plan.message);
+  setText("status-message", plan.status === "deploying" && plan.submitted_at ? `${plan.message} (${duration(Date.now() / 1000 - plan.submitted_at)} elapsed, usually a few minutes)` : plan.message);
   byId("approval-section").hidden = plan.status !== "planned";
   byId("deploy-button").hidden = plan.status !== "planned";
-  byId("operation-result").hidden = !plan.operation;
   setText("operation-name", plan.resource || plan.operation);
-  byId("cloud-link").href = `https://console.cloud.google.com/vertex-ai/agents/agent-engines?project=${encodeURIComponent(plan.project)}`;
+  byId("cloud-link").href = cloudConsoleUrl(plan.project);
+  byId("operation-result").hidden = !plan.operation || live;
   renderSandbox(plan.sandbox || { status: "not_run" });
   if (resetApproval) { byId("approve-deployment").checked = false; byId("confirm-project").value = ""; }
   byId("confirm-project").placeholder = plan.project;
@@ -143,7 +187,7 @@ function renderHistory() {
   setText("history-count", String(state.plans.length));
   if (!state.plans.length) {
     const row = document.createElement("tr");
-    const cell = document.createElement("td"); cell.colSpan = 5; cell.className = "empty-history";
+    const cell = document.createElement("td"); cell.colSpan = 6; cell.className = "empty-history";
     const label = document.createElement("strong"); label.textContent = "No deployments yet";
     cell.append(icon("inbox"), label); row.append(cell); byId("history-body").replaceChildren(row); icons();
     return;
@@ -155,9 +199,12 @@ function renderHistory() {
     sourceLabel.className = "history-source"; sourceLabel.append(icon(sourceIcons[plan.source_kind]), document.createTextNode(sourceNames[plan.source_kind])); source.append(sourceLabel);
     const time = document.createElement("td"); time.textContent = new Date(plan.created_at * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
     const status = document.createElement("td"); const badge = document.createElement("span"); badge.className = `badge ${plan.status}`; badge.textContent = statusNames[plan.status]; status.append(badge);
+    const cloud = document.createElement("td"); cloud.className = "resource-cell";
+    if (plan.resource) { const link = document.createElement("a"); link.className = "history-link"; link.href = cloudConsoleUrl(plan.project); link.target = "_blank"; link.rel = "noreferrer"; link.title = plan.resource; link.append(document.createTextNode(`Engine ${plan.resource.split("/").pop()}`), icon("external-link")); cloud.append(link); }
+    else cloud.textContent = plan.operation ? "Building..." : "-";
     const action = document.createElement("td"); const button = document.createElement("button"); button.type = "button"; button.className = "icon-button"; button.title = "Open deployment"; button.setAttribute("aria-label", `Open ${plan.display_name}`); button.append(icon("arrow-up-right"));
     button.addEventListener("click", () => { if (!state.busy) { showPlan(plan, true); byId("review-title").scrollIntoView({ behavior: "smooth", block: "start" }); } }); action.append(button);
-    row.append(name, source, time, status, action); return row;
+    row.append(name, source, time, status, cloud, action); return row;
   }));
   icons();
 }
@@ -255,22 +302,30 @@ byId("environment-button").addEventListener("click", () => byId("environment-dia
 byId("framework").addEventListener("change", () => { setText("framework-label", byId("framework").value === "google-adk" ? "Google ADK" : "Custom agent"); invalidatePlan(); });
 byId("check-cloud").addEventListener("click", async () => {
   const button = byId("check-cloud");
-  button.disabled = true;
-  setText("preflight-result", "Checking Google Cloud prerequisites...");
+  const list = byId("preflight-result");
+  button.disabled = true; list.hidden = false;
+  const pending = document.createElement("li"); pending.className = "note"; pending.textContent = "Checking Google Cloud prerequisites...";
+  list.replaceChildren(pending);
+  const checkIcons = { passed: "circle-check", skipped: "circle-minus", blocked: "circle-x", missing: "circle-x", unknown: "circle-help" };
+  const checkNames = { submission: "Cloud submission", billing: "Billing", vertex_api: "Vertex AI API", runtime_account: "Runtime service account", psc_attachment: "PSC network attachment", sandbox_engine: "Sandbox host engine", credentials: "Google credentials" };
   try {
     const report = await api("/api/preflight");
     const rows = report.checks.map((check) => {
-      const row = document.createElement("div");
-      const heading = document.createElement("strong"); heading.textContent = `${check.id.replaceAll("_", " ")}: ${check.status}`;
+      const row = document.createElement("li"); row.className = check.status;
+      const body = document.createElement("div");
+      const heading = document.createElement("strong"); heading.textContent = `${checkNames[check.id] || check.id} - ${check.status}`;
       const message = document.createElement("span"); message.textContent = check.message;
-      row.append(heading, message); return row;
+      body.append(heading, message); row.append(icon(checkIcons[check.status] || "circle-help"), body); return row;
     });
-    const note = document.createElement("p"); note.textContent = report.note;
-    byId("preflight-result").replaceChildren(...rows, note);
-  } catch (error) { setText("preflight-result", error.message); }
+    const note = document.createElement("li"); note.className = "note"; note.textContent = report.note;
+    list.replaceChildren(...rows, note); icons();
+  } catch (error) { pending.textContent = error.message; }
   finally { button.disabled = false; }
 });
 byId("close-environment").addEventListener("click", () => byId("environment-dialog").close());
+async function copyText(text, button) { try { await navigator.clipboard.writeText(text); button.title = "Copied"; } catch { showError("Clipboard unavailable."); } }
+byId("copy-resource").addEventListener("click", () => copyText(byId("resource-name").textContent, byId("copy-resource")));
+byId("copy-snippet").addEventListener("click", () => copyText(byId("query-snippet").textContent, byId("copy-snippet")));
 byId("copy-digest").addEventListener("click", async () => { try { await navigator.clipboard.writeText(state.plan.digest); byId("copy-digest").title = "Digest copied"; } catch { showError("Clipboard unavailable."); } });
 byId("download-plan").addEventListener("click", () => {
   if (!state.plan) return;
@@ -283,7 +338,9 @@ async function initialize() {
   try {
     state.config = await api("/api/config");
     const config = state.config;
-    setText("target-project", config.project); setText("target-region", config.region); setText("allowed-root", config.source_root); setText("runtime-account", config.runtime_account || "Agent Engine default service agent");
+    setText("target-project", config.project); setText("target-region", config.region);
+    setText("target-identity", config.runtime_account || "Agent Engine default service agent");
+    setText("target-network", config.network_attachment ? `PSC: ${config.network_attachment.split("/").pop()}` : "Public (no PSC attachment)"); setText("allowed-root", config.source_root); setText("runtime-account", config.runtime_account || "Agent Engine default service agent");
     byId("local-path").placeholder = config.source_root;
     if (!config.local_sources_enabled) {
       const local = document.querySelector('input[name="source-kind"][value="local"]');
@@ -301,3 +358,4 @@ async function initialize() {
 
 initialize();
 setInterval(() => { if (!document.hidden && !state.busy) refreshHistory(); }, 6000);
+setInterval(() => { if (state.plan?.status === "deploying" && state.plan.submitted_at) setText("status-message", `${state.plan.message} (${duration(Date.now() / 1000 - state.plan.submitted_at)} elapsed, usually a few minutes)`); }, 1000);

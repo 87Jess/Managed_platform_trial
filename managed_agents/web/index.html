@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="console-token" content="__CONSOLE_TOKEN__">
   <meta name="color-scheme" content="light">
-  <title>Deployments | Agent Platform</title>
+  <title>Agent Platform</title>
   <link rel="icon" href="/static/cloud.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css">
   <script defer src="/static/lucide.js"></script>
@@ -26,12 +26,20 @@
   <div class="workspace">
     <header class="topbar"><div class="breadcrumb">Workspace <i data-lucide="chevron-right"></i><strong>Deployments</strong></div><div class="cloud-brand"><img src="/static/cloud.svg" alt="Google Cloud"><span>Google Cloud</span></div></header>
     <main>
-      <div class="page-heading"><div><div class="eyebrow">AGENT OPERATIONS</div><h1>Deployments</h1></div><button id="new-button" class="button secondary" type="button"><i data-lucide="plus"></i>New deployment</button></div>
-      <section class="target-strip" aria-label="Deployment target">
-        <div><span class="strip-label">Runtime</span><strong><i data-lucide="cpu"></i>Agent Engine</strong></div>
-        <div class="project-strip"><span class="strip-label">Google Cloud project</span><strong id="target-project">Loading...</strong></div>
-        <div><span class="strip-label">Region</span><strong><i data-lucide="map-pin"></i><span id="target-region">Loading...</span></strong></div>
-        <div><span class="strip-label">Cloud submission</span><strong id="submission-state"><span class="status-dot warning"></span>Checking</strong></div>
+      <div class="page-heading"><div><div class="eyebrow">AGENT OPERATIONS</div><h1>Deploy an agent</h1><p class="page-lede">Package agent code, review the exact snapshot, test it in a sandbox, and deploy it to Vertex AI Agent Engine.</p></div><button id="new-button" class="button secondary" type="button"><i data-lucide="plus"></i>New deployment</button></div>
+      <section class="readiness" aria-labelledby="readiness-title">
+        <div class="readiness-head">
+          <div><h2 id="readiness-title">Environment</h2><span class="readiness-sub">Where agents are deployed and what the console can do</span></div>
+          <button id="check-cloud" class="button secondary" type="button"><i data-lucide="list-checks"></i><span>Run readiness checks</span></button>
+        </div>
+        <div class="readiness-grid">
+          <div class="tile"><span class="strip-label">Google Cloud project</span><strong id="target-project" class="mono">Loading...</strong></div>
+          <div class="tile"><span class="strip-label">Region</span><strong><i data-lucide="map-pin"></i><span id="target-region">Loading...</span></strong></div>
+          <div class="tile"><span class="strip-label">Runtime identity</span><strong id="target-identity">Loading...</strong></div>
+          <div class="tile"><span class="strip-label">Network</span><strong id="target-network">Loading...</strong></div>
+          <div class="tile"><span class="strip-label">Cloud submission</span><strong id="submission-state"><span class="status-dot warning"></span>Checking</strong></div>
+        </div>
+        <ul id="preflight-result" class="check-list" aria-live="polite" hidden></ul>
       </section>
 
       <div id="notice" class="notice" role="alert" hidden></div>
@@ -74,6 +82,15 @@
           <div id="review-empty" class="review-empty"><span class="empty-package"><i data-lucide="package-open"></i></span><h3>No snapshot selected</h3><span class="empty-detail">Awaiting source review</span><div class="empty-specs"><span><i data-lucide="cpu"></i>1 vCPU / 1 GiB</span><span><i data-lucide="layers"></i>0-2 instances</span></div></div>
           <div id="review-content" hidden>
             <div class="snapshot-name"><i data-lucide="box"></i><h3 id="snapshot-name"></h3><button class="icon-button" id="download-plan" type="button" title="Download deployment plan" aria-label="Download deployment plan"><i data-lucide="download"></i></button></div>
+            <ol id="progress-steps" class="progress-steps" aria-label="Deployment progress"></ol>
+            <div id="plan-alerts" class="plan-alerts" aria-live="polite"></div>
+            <div id="success-panel" class="success-panel" hidden>
+              <div class="success-head"><i data-lucide="circle-check-big"></i><div><strong>Agent is live on Agent Engine</strong><span id="success-meta"></span></div></div>
+              <label class="result-label">Resource name</label>
+              <div class="copy-row"><code id="resource-name"></code><button class="icon-button" id="copy-resource" type="button" title="Copy resource name" aria-label="Copy resource name"><i data-lucide="copy"></i></button></div>
+              <a class="button primary open-cloud" id="open-cloud" target="_blank" rel="noreferrer"><i data-lucide="external-link"></i><span>Open in Google Cloud console</span></a>
+              <details class="file-details" open><summary>Query it from Python</summary><div class="copy-row snippet-row"><pre id="query-snippet" class="snippet"></pre><button class="icon-button" id="copy-snippet" type="button" title="Copy snippet" aria-label="Copy snippet"><i data-lucide="copy"></i></button></div></details>
+            </div>
             <dl class="review-properties"><div><dt>Target</dt><dd>Vertex AI Agent Engine</dd></div><div><dt>Project</dt><dd id="review-project"></dd></div><div><dt>Entrypoint</dt><dd id="review-entrypoint"></dd></div><div><dt>Dependencies</dt><dd id="review-dependencies"></dd></div><div><dt>Source size</dt><dd id="review-size"></dd></div><div><dt>SHA-256</dt><dd class="digest-row"><code id="review-digest"></code><button class="icon-button" id="copy-digest" title="Copy source digest" aria-label="Copy source digest" type="button"><i data-lucide="copy"></i></button></dd></div></dl>
             <details class="file-details"><summary id="files-summary">Source files</summary><ul id="file-list"></ul></details>
             <div id="sandbox-section" class="sandbox-section">
@@ -91,11 +108,11 @@
         </aside>
       </div>
 
-      <section class="history-section" id="history" aria-labelledby="history-title"><div class="history-heading"><h2 id="history-title">Deployment history <span id="history-count">0</span></h2><button class="icon-button" type="button" id="refresh-history" title="Refresh deployment history" aria-label="Refresh deployment history"><i data-lucide="refresh-cw"></i></button></div><div class="table-scroll"><table><thead><tr><th>Agent</th><th>Source</th><th>Created</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="history-body"><tr><td colspan="5" class="empty-history"><i data-lucide="inbox"></i><strong>No deployments yet</strong></td></tr></tbody></table></div></section>
+      <section class="history-section" id="history" aria-labelledby="history-title"><div class="history-heading"><h2 id="history-title">Deployment history <span id="history-count">0</span></h2><button class="icon-button" type="button" id="refresh-history" title="Refresh deployment history" aria-label="Refresh deployment history"><i data-lucide="refresh-cw"></i></button></div><div class="table-scroll"><table><thead><tr><th>Agent</th><th>Source</th><th>Created</th><th>Status</th><th>Google Cloud</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="history-body"><tr><td colspan="6" class="empty-history"><i data-lucide="inbox"></i><strong>No deployments yet</strong></td></tr></tbody></table></div></section>
       <footer class="page-footer"><span>Agent Platform <span class="footer-separator">/</span> Local deployment workspace</span><a href="https://cloud.google.com/vertex-ai/generative-ai/docs/agent-engine/overview" target="_blank" rel="noreferrer">Agent Engine documentation<i data-lucide="arrow-up-right"></i></a></footer>
     </main>
   </div>
 
-  <dialog id="environment-dialog"><div class="dialog-heading"><h2>Environment</h2><button class="icon-button" id="close-environment" type="button" aria-label="Close environment" title="Close"><i data-lucide="x"></i></button></div><dl id="environment-details" class="environment-details"></dl><button id="check-cloud" class="button secondary" type="button"><i data-lucide="list-checks"></i>Check GCP access</button><div id="preflight-result" class="preflight-result" aria-live="polite"></div><div class="dialog-footer"><span class="status-dot"></span>Loopback operator session</div></dialog>
+  <dialog id="environment-dialog"><div class="dialog-heading"><h2>Environment</h2><button class="icon-button" id="close-environment" type="button" aria-label="Close environment" title="Close"><i data-lucide="x"></i></button></div><dl id="environment-details" class="environment-details"></dl><div class="dialog-footer"><span class="status-dot"></span>Loopback operator session</div></dialog>
 </body>
 </html>

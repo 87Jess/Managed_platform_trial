@@ -234,6 +234,43 @@ class AgentEngineCloud:
             return response.json()
 
 
+def google_error(error: HTTPError) -> str:
+    """Short, operator-facing summary of a Google API error: HTTP code, status and message."""
+    response = error.response
+    if response is None:
+        return "no response"
+    detail = ""
+    try:
+        body = response.json().get("error", {})
+        detail = ": ".join(part for part in (body.get("status", ""), body.get("message", "")) if part)
+    except (ValueError, AttributeError):
+        pass
+    return f"HTTP {response.status_code}" + (f": {detail[:400]}" if detail else "")
+
+
+def operation_error(error: dict) -> str:
+    message = str(error.get("message", "")).strip()
+    return message[:600] if message else f"error code {error.get('code', 'unknown')}"
+
+
+def source_warnings(files: dict[str, bytes], framework: str) -> list[str]:
+    """Hints about common mistakes; never blocks a deployment."""
+    def text(name):
+        return files[name].decode("utf-8", "ignore")
+
+    python = " ".join(text(name) for name in files if name.endswith(".py"))
+    dependencies = " ".join(text(name).lower() for name in files
+                            if name.rsplit("/", 1)[-1] in {"requirements.txt", "pyproject.toml", "uv.lock"})
+    warnings = []
+    if framework == "custom" and ("google.adk" in python or "from google import adk" in python):
+        warnings.append("This source imports Google ADK. Choose the Google ADK framework, otherwise "
+                        "Agent Engine will call a query() method an ADK agent does not have.")
+    if framework == "google-adk" and "google-cloud-aiplatform" not in dependencies:
+        warnings.append("Google ADK deployments need google-cloud-aiplatform[agent_engines,adk] in the "
+                        "dependencies; it was not found, so the deployment will likely fail to start.")
+    return warnings
+
+
 def github_files(location: str, revision: str):
     match = re.fullmatch(r"https://github\.com/([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+?)(?:\.git)?/?",
                          location)
@@ -488,6 +525,8 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
                 "created_at": time.time(), "status": "planned", "operation": "", "resource": "",
                 "message": "Snapshot ready for approval", "sandbox": {"status": "not_run"},
                 "reviewed_by": request.state.user, "approved_by": "",
+                "warnings": source_warnings(files, data.framework), "status_check": "",
+                "submitted_at": 0, "completed_at": 0,
                 "bundle": bundle, "input": data}
         with lock:
             if len(plans) >= 8:
@@ -527,7 +566,8 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
             with lock:
                 plan["operation"] = operation["name"]
                 plan["status"] = "deploying"
-                plan["message"] = "Google Cloud accepted the deployment"
+                plan["submitted_at"] = time.time()
+                plan["message"] = "Google Cloud accepted the deployment and is building the agent"
         except GoogleAuthError:
             with lock:
                 plan["status"] = "failed"
@@ -537,9 +577,10 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
             with lock:
                 plan["status"] = "failed" if 400 <= code < 500 and code != 408 else "unknown"
                 plan["message"] = (
-                    f"Google Cloud rejected the request ({code}). Check API enablement, billing, IAM and runtime settings."
+                    f"Google Cloud rejected the request ({google_error(error)})"
                     if plan["status"] == "failed" else
-                    "Submission could not be confirmed. Check Google Cloud before retrying.")
+                    f"Submission could not be confirmed ({google_error(error)}). "
+                    "Check Google Cloud before retrying.")
         except (RequestException, KeyError, ValueError):
             with lock:
                 plan["status"] = "unknown"
@@ -573,18 +614,31 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
                 raise HTTPException(404, "Plan expired or was not found")
             operation = plan["operation"] if plan["status"] == "deploying" else ""
         if operation:
+            # A failed status check never changes the deployment state: the operation keeps
+            # running in Google Cloud, so report why the check failed and poll again later.
+            result, problem = None, ""
             try:
                 result = cloud.status(operation)
-            except (RequestException, GoogleAuthError, SourceError):
-                raise HTTPException(502, "Cloud status is temporarily unavailable; the operation may still be running") from None
-            if result.get("done"):
-                with lock:
+            except HTTPError as error:
+                problem = f"Could not read deployment progress ({google_error(error)})"
+            except GoogleAuthError:
+                problem = "Could not read deployment progress: Google credentials expired or are unavailable"
+            except SourceError as error:
+                problem = f"Could not read deployment progress: {error} ({operation})"
+            except (RequestException, ValueError):
+                problem = "Could not reach Google Cloud to read deployment progress; retrying"
+            with lock:
+                plan["status_check"] = problem
+                if result and result.get("done"):
+                    plan["completed_at"] = time.time()
                     if result.get("error"):
                         plan["status"] = "failed"
-                        plan["message"] = "Agent Engine reported a deployment failure. Review the operation in Google Cloud."
+                        plan["message"] = ("Agent Engine reported a deployment failure: "
+                                           + operation_error(result["error"]))
                     else:
                         plan["status"] = "succeeded"
-                        plan["resource"] = result.get("response", {}).get("name", "")
+                        plan["resource"] = result.get("response", {}).get("name", "") or (
+                            operation.split("/operations/")[0] if "/reasoningEngines/" in operation else "")
                         plan["message"] = "Agent Engine deployment completed"
         with lock:
             return public_plan(plan)
