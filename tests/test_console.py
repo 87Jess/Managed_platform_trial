@@ -872,3 +872,25 @@ def test_stream_summary_surfaces_agent_error_events():
     assert summary["reply"] == ""
     assert summary["errors"] == ["MALFORMED_FUNCTION_CALL: The model returned an invalid call"]
     assert summary["tools"][0]["name"] == "get_current_weather"
+
+
+def test_rejected_method_schema_falls_back_to_message(console, monkeypatch):
+    from requests import HTTPError, Response
+
+    client, cloud, source = console
+    (source / "agent.py").write_text("class A:\n    def query(self, question: str): ...\nroot_agent = A()\n")
+    original = cloud.submit
+
+    def picky(body):
+        if body["spec"]["classMethods"][0]["parameters"]["properties"].get("question"):
+            response = Response()
+            response.status_code = 400
+            response._content = b'{"error": {"message": "Invalid spec.class_methods[0].parameters"}}'
+            raise HTTPError(response=response)
+        return original(body)
+
+    monkeypatch.setattr(cloud, "submit", picky)
+    plan = plan_for(client, source)
+    assert plan["class_methods"][0]["parameters"]["required"] == ["question"]
+    assert approve(client, plan).json()["status"] == "deploying"
+    assert cloud.submissions[0]["spec"]["classMethods"][0]["parameters"]["required"] == ["message"]
