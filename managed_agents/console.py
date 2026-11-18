@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -522,6 +523,8 @@ def main():
     config = ConsoleConfig.from_env()
     if args.check_cloud:
         print(json.dumps(AgentEngineCloud(config).preflight(), indent=2), flush=True)
+        print("Checks only; the console was not started. Run without --check-cloud to open "
+              f"the frontend at http://127.0.0.1:{config.port}", file=sys.stderr, flush=True)
         return
     if args.create_sandbox_engine:
         if not config.allow_sandbox_test:
@@ -529,7 +532,10 @@ def main():
         engine = AgentEngineCloud(config).create_sandbox_engine()
         print(f"Set CONSOLE_SANDBOX_ENGINE={engine}", flush=True)
         return
-    uvicorn.run(create_console(config), host="127.0.0.1", port=config.port, access_log=False)
+    app = create_console(config)
+    print(f"Agent Platform console: open http://127.0.0.1:{config.port} in your browser "
+          "(Ctrl+C to stop)", flush=True)
+    uvicorn.run(app, host="127.0.0.1", port=config.port, access_log=False)
 
 
 if __name__ == "__main__":
