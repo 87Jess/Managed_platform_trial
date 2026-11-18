@@ -38,6 +38,12 @@ and the source or indicator name, and keep answers short and friendly. If a ques
 ambiguous (which country, which year), ask one short clarifying question. You can greet
 people and explain what you can do without calling a tool."""
 
+TOOLS_DOWN_NOTE = """
+
+The Data360 data tools are unavailable right now, so you cannot look up figures. Say so
+briefly, do not give numbers from memory, and suggest trying again later. You can still
+greet people and explain what you can help with."""
+
 
 class MCPError(RuntimeError):
     pass
@@ -332,11 +338,18 @@ class Data360Agent:
 
         used: list[str] = []
         with self.client_factory() as client:
-            definitions, names = gemini_tools(self._catalog(client))
+            # If the Data360 server can't be reached (e.g. no outbound internet from the runtime),
+            # still answer: Gemini explains the problem instead of the whole call failing.
+            unavailable = ""
+            try:
+                definitions, names = gemini_tools(self._catalog(client))
+            except (MCPError, httpx.HTTPError) as error:
+                definitions, names, unavailable = [], {}, f"{type(error).__name__}: {error}"[:300]
             model = self._model(model_name).bind_tools(definitions) if definitions else self._model(model_name)
+            system = SYSTEM_PROMPT + (TOOLS_DOWN_NOTE if unavailable else "")
 
             def call_model(state: MessagesState):
-                return {"messages": [model.invoke([SystemMessage(SYSTEM_PROMPT), *state["messages"]])]}
+                return {"messages": [model.invoke([SystemMessage(system), *state["messages"]])]}
 
             def call_tools(state: MessagesState):
                 replies = []
@@ -379,8 +392,11 @@ class Data360Agent:
 
         final = state["messages"][-1]
         reply = final.text if isinstance(final, AIMessage) else ""
-        return {"reply": reply.strip() or "I couldn't produce an answer for that.", "tools_used": used,
-                "model": model_name}
+        result = {"reply": reply.strip() or "I couldn't produce an answer for that.", "tools_used": used,
+                  "model": model_name}
+        if unavailable:
+            result["tools_unavailable"] = unavailable
+        return result
 
 
 root_agent = Data360Agent()
