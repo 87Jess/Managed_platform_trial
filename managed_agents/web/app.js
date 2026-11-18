@@ -250,7 +250,7 @@ byId("clear-uploads").addEventListener("click", async () => {
   finally { setBusy(false); selectRequiredFields(); }
 });
 byId("refresh-history").addEventListener("click", refreshHistory);
-byId("new-button").addEventListener("click", () => { byId("deployment-form").reset(); state.file = null; state.uploadId = null; selectSource("local"); setText("upload-name", "Choose ZIP archive"); setText("upload-size", "8 MiB maximum"); clearError(); byId("new-deployment").scrollIntoView({ behavior: "smooth" }); byId("local-path").focus({ preventScroll: true }); });
+byId("new-button").addEventListener("click", () => { byId("deployment-form").reset(); state.file = null; state.uploadId = null; const kind = state.config?.local_sources_enabled === false ? "github" : "local"; document.querySelector(`input[name="source-kind"][value="${kind}"]`).checked = true; selectSource(kind); setText("upload-name", "Choose ZIP archive"); setText("upload-size", "8 MiB maximum"); clearError(); byId("new-deployment").scrollIntoView({ behavior: "smooth" }); byId("local-path").focus({ preventScroll: true }); });
 byId("environment-button").addEventListener("click", () => byId("environment-dialog").showModal());
 byId("framework").addEventListener("change", () => { setText("framework-label", byId("framework").value === "google-adk" ? "Google ADK" : "Custom agent"); invalidatePlan(); });
 byId("check-cloud").addEventListener("click", async () => {
@@ -285,8 +285,14 @@ async function initialize() {
     const config = state.config;
     setText("target-project", config.project); setText("target-region", config.region); setText("allowed-root", config.source_root); setText("runtime-account", config.runtime_account);
     byId("local-path").placeholder = config.source_root;
+    if (!config.local_sources_enabled) {
+      const local = document.querySelector('input[name="source-kind"][value="local"]');
+      local.closest("label").hidden = true;
+      document.querySelector('input[name="source-kind"][value="github"]').checked = true;
+      selectSource("github");
+    }
     byId("submission-state").replaceChildren(Object.assign(document.createElement("span"), { className: `status-dot${config.deployment_enabled ? "" : " warning"}` }), document.createTextNode(config.deployment_enabled ? "Enabled" : "Locked"));
-    const details = { "Project": config.project, "Region": config.region, "Allowed source root": config.source_root, "Runtime service account": config.runtime_account, "PSC attachment": config.network_attachment, "Cloud submission": config.deployment_enabled ? "Enabled" : "Locked", "Sandbox host engine": config.sandbox_engine || "Not configured", "Sandbox testing": config.sandbox_enabled ? (config.sandbox_required ? "Required before deploy" : "Enabled") : "Disabled" };
+    const details = { ...(config.hosted ? { "Hosted on": "Cloud Run (Identity-Aware Proxy)", "Signed in as": config.user } : {}), "Project": config.project, "Region": config.region, ...(config.local_sources_enabled ? { "Allowed source root": config.source_root } : {}), "Runtime service account": config.runtime_account, "PSC attachment": config.network_attachment, "Cloud submission": config.deployment_enabled ? "Enabled" : "Locked", "Sandbox host engine": config.sandbox_engine || "Not configured", "Sandbox testing": config.sandbox_enabled ? (config.sandbox_required ? "Required before deploy" : "Enabled") : "Disabled" };
     byId("environment-details").replaceChildren(...Object.entries(details).map(([label, value]) => { const row = document.createElement("div"); const term = document.createElement("dt"); term.textContent = label; const description = document.createElement("dd"); description.textContent = value; row.append(term, description); return row; }));
     updateApproval();
     await refreshHistory();

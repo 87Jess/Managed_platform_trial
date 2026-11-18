@@ -52,6 +52,10 @@ cost drivers and the approval checklist. **Do not deploy workloads until those g
    review the snapshot, optionally **Test in GCP sandbox**, approve, and the console
    creates the Agent Engine resource and tracks the operation until it completes.
 
+To host the console in GCP instead of running it locally, set `deploy_console = true` in
+Terraform: it runs on Cloud Run behind Identity-Aware Proxy and deploys with its own service
+account. See [docs/console.md](docs/console.md#hosted-console-cloud-run--iap).
+
 Sandbox testing runs the snapshot in an isolated Agent Engine code-execution sandbox
 before deployment; see [docs/console.md](docs/console.md#test-in-a-gcp-sandbox).
 

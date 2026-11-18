@@ -19,3 +19,8 @@ output "image_repository" {
 output "gateway_uri" {
   value = var.deploy_workloads ? google_cloud_run_v2_service.gateway[0].uri : null
 }
+
+output "console_url" {
+  description = "Hosted console; sign in with an identity listed in console_users."
+  value       = var.deploy_console ? google_cloud_run_v2_service.console[0].uri : null
+}

@@ -138,6 +138,37 @@ Not implemented yet: shell sandboxes built from
 [snapshots](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/sandbox/manage-snapshots)
 of a prepared environment for reuse.
 
+## Hosted Console (Cloud Run + IAP)
+
+Instead of running the console on your machine, Terraform can host it on Cloud Run behind
+[Identity-Aware Proxy](https://docs.cloud.google.com/run/docs/securing/identity-aware-proxy-cloud-run).
+People open its `run.app` URL and sign in with their Google identity; deployments run as the
+console's own service account (`platform-console`), not with anyone's local credentials.
+
+In hosted mode (`CONSOLE_HOSTED=1`, set by Terraform):
+
+- Every request, including the page and static files, must carry an IAP signed header. The console
+  verifies its signature, issuer and audience (`CONSOLE_IAP_AUDIENCE`), and optionally checks
+  the email against `CONSOLE_ALLOWED_USERS`. Requests that bypass IAP are refused.
+- Sources are GitHub commits and ZIP uploads only; local folders are disabled.
+- Each plan records `reviewed_by` and `approved_by` emails.
+- Plans and staged uploads live in memory, so the service runs a single instance. They are lost
+  when the instance stops; Agent Engine operations already submitted continue in Google Cloud.
+
+Steps:
+
+1. Build and push the image with `cloudbuild.yaml`; the policy image also contains the console.
+2. In `terraform.tfvars` set `deploy_console = true`, `policy_image` (or `console_image`) by digest,
+   and `console_users = ["user:you@example.com"]`. Set `console_allow_deploy` and
+   `console_security_review_approved` once the gates are met, and `console_sandbox_engine` to
+   enable sandbox tests.
+3. `terraform -chdir=infra plan`, review, then apply. Open the `console_url` output.
+
+Terraform creates the console service account with `roles/aiplatform.user`, read-only network and
+service-usage viewers, and `roles/iam.serviceAccountUser` on the agent runtime accounts only.
+In a project without an organization, enable IAP on the service once in the Google Cloud console
+(or configure a custom OAuth client) before Terraform can manage access, as Google documents.
+
 ## Enable Real Deployment
 
 Complete the infrastructure and security gates in [deployment-plan.md](deployment-plan.md),

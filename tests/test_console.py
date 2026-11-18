@@ -406,3 +406,105 @@ def test_sandbox_errors_do_not_leak_details(tmp_path, monkeypatch):
     result = wait_for_sandbox(client, plan)["sandbox"]
     assert result["status"] == "error"
     assert "private" not in str(result)
+
+
+IAP_AUDIENCE = "/projects/123456/locations/us-central1/services/agent-platform-console"
+HOSTED_URL = "https://agent-platform-console-abc-uc.a.run.app"
+
+
+def hosted_console(tmp_path, monkeypatch, **overrides):
+    web = tmp_path / "web"
+    web.mkdir(exist_ok=True)
+    (web / "index.html").write_text('<meta name="console-token" content="__CONSOLE_TOKEN__">')
+    monkeypatch.setattr("managed_agents.console.WEB_ROOT", web)
+    cloud = FakeCloud()
+
+    def verifier(assertion, audience):
+        assert audience == IAP_AUDIENCE
+        if not assertion.startswith("valid:"):
+            raise ValueError("bad signature")
+        return {"email": assertion.removeprefix("valid:"), "iss": "https://cloud.google.com/iap"}
+
+    settings = {"source_root": tmp_path, "project": "example-project", "allow_deploy": True,
+                "security_review_approved": True, "hosted": True, "iap_audience": IAP_AUDIENCE,
+                **overrides}
+    client = TestClient(create_console(ConsoleConfig(**settings), cloud=cloud, iap_verifier=verifier),
+                        base_url=HOSTED_URL)
+    return client, cloud
+
+
+def signed_in(client, email="operator@example.com"):
+    client.headers.update({"X-Goog-IAP-JWT-Assertion": f"valid:{email}"})
+    token = re.search('content="([^"]+)"', client.get("/").text).group(1)
+    client.headers.update({"X-Console-Token": token})
+    return client
+
+
+def test_hosted_console_requires_valid_iap_assertion(tmp_path, monkeypatch):
+    client, _ = hosted_console(tmp_path, monkeypatch)
+    assert client.get("/").status_code == 401
+    assert client.get("/static/app.js").status_code == 401
+    client.headers.update({"X-Goog-IAP-JWT-Assertion": "forged"})
+    assert client.get("/").status_code == 401
+    config = signed_in(client).get("/api/config").json()
+    assert config["hosted"] is True
+    assert config["user"] == "operator@example.com"
+    assert config["local_sources_enabled"] is False
+    assert config["source_root"] == ""
+
+
+def test_hosted_console_enforces_user_allowlist(tmp_path, monkeypatch):
+    client, _ = hosted_console(tmp_path, monkeypatch,
+                               allowed_users=frozenset({"operator@example.com"}))
+    client.headers.update({"X-Goog-IAP-JWT-Assertion": "valid:someone@example.com"})
+    assert client.get("/").status_code == 401
+    assert signed_in(client).get("/api/config").status_code == 200
+
+
+def test_hosted_console_rejects_local_folders_and_cross_origin(tmp_path, monkeypatch):
+    client, cloud = hosted_console(tmp_path, monkeypatch)
+    signed_in(client)
+    response = client.post("/api/plans", json={"source_kind": "local", "location": str(tmp_path),
+                                               "display_name": "Agent"})
+    assert response.status_code == 400
+    assert client.get("/api/config", headers={"Origin": "https://attacker.test"}).status_code == 403
+    assert client.get("/api/config", headers={"Origin": HOSTED_URL}).status_code == 200
+    assert not cloud.submissions
+
+
+def test_hosted_console_records_who_reviewed_and_approved(tmp_path, monkeypatch):
+    client, cloud = hosted_console(tmp_path, monkeypatch)
+    signed_in(client, "reviewer@example.com")
+    archive = make_zip({"agent.py": "root_agent = object()", "requirements.txt": ""})
+    upload_id = client.post("/api/uploads", content=archive).json()["id"]
+    plan = client.post("/api/plans", json={"source_kind": "zip", "location": upload_id,
+                                           "display_name": "Hosted agent"}).json()
+    assert plan["reviewed_by"] == "reviewer@example.com"
+    signed_in(client, "approver@example.com")
+    result = approve(client, plan).json()
+    assert result["status"] == "deploying"
+    assert result["approved_by"] == "approver@example.com"
+    assert len(cloud.submissions) == 1
+
+
+def test_hosted_console_needs_iap_audience(tmp_path):
+    with pytest.raises(ValueError, match="CONSOLE_IAP_AUDIENCE"):
+        create_console(ConsoleConfig(source_root=tmp_path, hosted=True), cloud=FakeCloud())
+
+
+def test_iap_verifier_checks_issuer_and_audience(monkeypatch):
+    from google.oauth2 import id_token
+
+    from managed_agents.console import IAP_CERTS_URL, verify_iap_assertion
+
+    calls = []
+    def fake_verify(token, request, audience, certs_url):
+        calls.append((audience, certs_url))
+        return {"iss": "https://accounts.google.com", "email": "a@example.com"}
+    monkeypatch.setattr(id_token, "verify_token", fake_verify)
+    with pytest.raises(ValueError):
+        verify_iap_assertion("token", IAP_AUDIENCE)
+    assert calls == [(IAP_AUDIENCE, IAP_CERTS_URL)]
+    monkeypatch.setattr(id_token, "verify_token", lambda *a, **k: {
+        "iss": "https://cloud.google.com/iap", "email": "a@example.com"})
+    assert verify_iap_assertion("token", IAP_AUDIENCE)["email"] == "a@example.com"

@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from google.auth.exceptions import GoogleAuthError
+from google.auth.transport import requests as google_requests
 from google.auth.transport.requests import AuthorizedSession
 from pydantic import Field
 from requests.exceptions import HTTPError, RequestException
@@ -37,6 +38,19 @@ from managed_agents.sources import (
 )
 
 WEB_ROOT = Path(__file__).resolve().parent / "web"
+IAP_CERTS_URL = "https://www.gstatic.com/iap/verify/public_key"
+IAP_ISSUER = "https://cloud.google.com/iap"
+
+
+def verify_iap_assertion(assertion: str, audience: str) -> dict:
+    """Verify the signed header IAP adds to every request it lets through."""
+    from google.oauth2 import id_token
+
+    claims = id_token.verify_token(assertion, google_requests.Request(), audience=audience,
+                                   certs_url=IAP_CERTS_URL)
+    if claims.get("iss") != IAP_ISSUER or not claims.get("email"):
+        raise ValueError("Not an IAP assertion")
+    return claims
 
 
 @dataclass(frozen=True)
@@ -52,6 +66,9 @@ class ConsoleConfig:
     sandbox_engine: str = ""
     allow_sandbox_test: bool = False
     require_sandbox_test: bool = False
+    hosted: bool = False
+    iap_audience: str = ""
+    allowed_users: frozenset = frozenset()
 
     @property
     def sandbox_enabled(self):
@@ -68,11 +85,12 @@ class ConsoleConfig:
 
     @classmethod
     def from_env(cls):
+        hosted = os.environ.get("CONSOLE_HOSTED") == "1"
+        port = os.environ.get("PORT") if hosted else None  # Cloud Run sets PORT
         return cls(
             source_root=Path(os.environ.get("CONSOLE_SOURCE_ROOT", str(Path.cwd()))).resolve(),
             project=os.environ.get("GOOGLE_CLOUD_PROJECT", "itsai-mai-gcp-lab-proj"),
             region=os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
-            port=int(os.environ.get("CONSOLE_PORT", "8088")),
             allow_deploy=os.environ.get("CONSOLE_ALLOW_DEPLOY") == "1",
             security_review_approved=os.environ.get("CONSOLE_SECURITY_REVIEW_APPROVED") == "1",
             runtime_account=os.environ.get("CONSOLE_RUNTIME_ACCOUNT", ""),
@@ -80,6 +98,12 @@ class ConsoleConfig:
             sandbox_engine=os.environ.get("CONSOLE_SANDBOX_ENGINE", ""),
             allow_sandbox_test=os.environ.get("CONSOLE_ALLOW_SANDBOX_TEST") == "1",
             require_sandbox_test=os.environ.get("CONSOLE_REQUIRE_SANDBOX_TEST") == "1",
+            hosted=hosted,
+            port=int(port or os.environ.get("CONSOLE_PORT", "8088")),
+            iap_audience=os.environ.get("CONSOLE_IAP_AUDIENCE", ""),
+            allowed_users=frozenset(user.strip().lower() for user in
+                                    os.environ.get("CONSOLE_ALLOWED_USERS", "").split(",")
+                                    if user.strip()),
         )
 
 
@@ -255,8 +279,13 @@ def deployment_body(config: ConsoleConfig, data: DeploymentInput, bundle: Bundle
     return body
 
 
-def create_console(config: ConsoleConfig | None = None, *, cloud=None) -> FastAPI:
+def create_console(config: ConsoleConfig | None = None, *, cloud=None,
+                   iap_verifier=verify_iap_assertion) -> FastAPI:
     config = config or ConsoleConfig.from_env()
+    if config.hosted and not re.fullmatch(
+            r"/projects/[0-9]+/locations/[a-z0-9-]+/services/[a-z0-9-]+", config.iap_audience):
+        raise ValueError("Hosted console requires CONSOLE_IAP_AUDIENCE "
+                         "(/projects/NUMBER/locations/REGION/services/NAME)")
     if not re.fullmatch(r"[a-z][a-z0-9-]{4,61}[a-z0-9]", config.project):
         raise ValueError("Invalid configured Google Cloud project")
     if not re.fullmatch(r"[a-z]+-[a-z]+[0-9]+", config.region):
@@ -300,13 +329,37 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None) -> FastAP
         with lock:
             plan["sandbox"] = {**plan["sandbox"], **result}
 
+    def hosted_user(request: Request) -> str | None:
+        """Email of the IAP-authenticated caller, or None if the request must be refused."""
+        assertion = request.headers.get("x-goog-iap-jwt-assertion", "")
+        if not assertion:
+            return None
+        try:
+            email = str(iap_verifier(assertion, config.iap_audience)["email"]).lower()
+        except (GoogleAuthError, ValueError, KeyError):
+            return None
+        if config.allowed_users and email not in config.allowed_users:
+            return None
+        return email
+
     @app.middleware("http")
     async def local_boundary(request: Request, call_next):
-        if f"http://{request.headers.get('host', '')}" not in origins:
-            return JSONResponse({"detail": "Loopback host required"}, status_code=403)
         origin = request.headers.get("origin")
-        if origin and origin not in origins:
-            return JSONResponse({"detail": "Cross-origin requests are not allowed"}, status_code=403)
+        if config.hosted:
+            # Behind Cloud Run + IAP: every request must carry a valid IAP assertion.
+            user = hosted_user(request)
+            if user is None:
+                return JSONResponse({"detail": "Sign-in through Identity-Aware Proxy required"},
+                                    status_code=401)
+            request.state.user = user
+            if origin and origin != f"https://{request.headers.get('host', '')}":
+                return JSONResponse({"detail": "Cross-origin requests are not allowed"}, status_code=403)
+        else:
+            if f"http://{request.headers.get('host', '')}" not in origins:
+                return JSONResponse({"detail": "Loopback host required"}, status_code=403)
+            if origin and origin not in origins:
+                return JSONResponse({"detail": "Cross-origin requests are not allowed"}, status_code=403)
+            request.state.user = ""
         if request.url.path.startswith("/api/"):
             if not hmac.compare_digest(request.headers.get("x-console-token", ""), token):
                 return JSONResponse({"detail": "Console session required"}, status_code=403)
@@ -324,6 +377,8 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None) -> FastAP
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; "
             "font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        if config.hosted:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
 
     @app.exception_handler(SourceError)
@@ -340,9 +395,12 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None) -> FastAP
             "__CONSOLE_TOKEN__", token))
 
     @app.get("/api/config")
-    def configuration():
+    def configuration(request: Request):
         return {"project": config.project, "region": config.region,
-                "source_root": str(config.source_root), "runtime_account": config.account,
+                "hosted": config.hosted, "user": request.state.user,
+                "local_sources_enabled": not config.hosted,
+                "source_root": "" if config.hosted else str(config.source_root),
+                "runtime_account": config.account,
                 "network_attachment": config.attachment,
                 "deployment_enabled": config.allow_deploy and config.security_review_approved,
                 "sandbox_enabled": config.sandbox_enabled, "sandbox_engine": config.sandbox_engine,
@@ -381,7 +439,10 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None) -> FastAP
         return {"discarded": count}
 
     @app.post("/api/plans")
-    def prepare(data: DeploymentInput):
+    def prepare(data: DeploymentInput, request: Request):
+        if config.hosted and data.source_kind == "local":
+            raise HTTPException(400, "Local folders are not available in the hosted console; "
+                                     "use a GitHub commit or a ZIP upload")
         with lock:
             cleanup()
             if len(plans) >= 8:
@@ -410,6 +471,7 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None) -> FastAP
                 "dependency_format": bundle.dependency_format, "requirements_file": bundle.requirements,
                 "created_at": time.time(), "status": "planned", "operation": "", "resource": "",
                 "message": "Snapshot ready for approval", "sandbox": {"status": "not_run"},
+                "reviewed_by": request.state.user, "approved_by": "",
                 "bundle": bundle, "input": data}
         with lock:
             if len(plans) >= 8:
@@ -426,7 +488,7 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None) -> FastAP
             return {"plans": [public_plan(plan) for plan in reversed(list(plans.values()))]}
 
     @app.post("/api/plans/{plan_id}/deploy")
-    def deploy(plan_id: str, approval: Approval):
+    def deploy(plan_id: str, approval: Approval, request: Request):
         if not config.allow_deploy or not config.security_review_approved:
             raise HTTPException(403, "Cloud deployment is locked by the operator configuration")
         with lock:
@@ -443,6 +505,7 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None) -> FastAP
             if config.require_sandbox_test and plan["sandbox"]["status"] != "passed":
                 raise HTTPException(409, "This snapshot must pass a GCP sandbox test before deployment")
             plan["status"] = "submitting"
+            plan["approved_by"] = request.state.user
         try:
             operation = cloud.submit(deployment_body(config, plan["input"], plan["bundle"]))
             with lock:
@@ -533,6 +596,12 @@ def main():
         print(f"Set CONSOLE_SANDBOX_ENGINE={engine}", flush=True)
         return
     app = create_console(config)
+    if config.hosted:
+        # Cloud Run terminates TLS and IAP authenticates every request before it arrives.
+        print(f"Agent Platform console (hosted) listening on port {config.port}", flush=True)
+        uvicorn.run(app, host="0.0.0.0", port=config.port, access_log=False,
+                    proxy_headers=False)
+        return
     print(f"Agent Platform console: open http://127.0.0.1:{config.port} in your browser "
           "(Ctrl+C to stop)", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=config.port, access_log=False)

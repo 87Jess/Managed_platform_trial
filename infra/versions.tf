@@ -3,11 +3,11 @@ terraform {
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = ">= 6.10, < 7"
+      version = ">= 7.21, < 9"
     }
     google-beta = {
       source  = "hashicorp/google-beta"
-      version = ">= 6.10, < 7"
+      version = ">= 7.21, < 9"
     }
   }
   # Configure an encrypted, access-controlled remote backend before any real apply, e.g.
