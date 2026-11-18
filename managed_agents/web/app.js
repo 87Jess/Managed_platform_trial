@@ -269,10 +269,13 @@ function agentCard(agent) {
   card.append(facts);
   if (agent.methods.length) { const methods = element("div", "agent-methods"); for (const method of agent.methods) methods.append(element("code", "", method)); card.append(methods); }
   const actions = element("div", "agent-actions");
+  const test = element("button", "button primary"); test.type = "button"; test.append(icon("message-square"), document.createTextNode("Test"));
+  test.disabled = !agent.methods.length; if (!agent.methods.length) test.title = "This agent exposes no methods to call";
+  test.addEventListener("click", () => openTester(agent));
   const copy = element("button", "button secondary"); copy.type = "button"; copy.append(icon("copy"), document.createTextNode("Copy resource name"));
   copy.addEventListener("click", () => copyText(agent.name, copy));
   const open = element("a", "button secondary"); open.href = cloudConsoleUrl(state.config?.project || ""); open.target = "_blank"; open.rel = "noreferrer"; open.append(icon("external-link"), document.createTextNode("Google Cloud"));
-  actions.append(copy, open); card.append(actions);
+  actions.append(test, copy, open); card.append(actions);
   return card;
 }
 
@@ -302,6 +305,92 @@ async function loadGarden() {
   } finally { garden.loading = false; button.disabled = false; renderGarden(); }
 }
 byId("garden-refresh").addEventListener("click", loadGarden);
+
+const tester = { agent: null, session: "", busy: false, userId: "console-tester" };
+function testDefaults(agent) {
+  const methods = agent.methods || [];
+  const textKey = ["langchain", "langgraph", "llama_index"].includes(agent.framework) ? "input" : "message";
+  if (methods.includes("async_stream_query")) return { method: "async_stream_query", mode: "stream", input: { user_id: tester.userId, message: "{message}" } };
+  if (methods.includes("stream_query") && agent.framework === "google-adk") return { method: "stream_query", mode: "stream", input: { user_id: tester.userId, message: "{message}" } };
+  if (methods.includes("query")) return { method: "query", mode: "query", input: { [textKey]: "{message}" } };
+  if (methods.includes("stream_query")) return { method: "stream_query", mode: "stream", input: { [textKey]: "{message}" } };
+  return { method: methods[0] || "query", mode: "query", input: { message: "{message}" } };
+}
+function fillMessage(value, message) {
+  if (typeof value === "string") return value.replaceAll("{message}", message);
+  if (Array.isArray(value)) return value.map((item) => fillMessage(item, message));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, fillMessage(item, message)]));
+  return value;
+}
+function testInfo() {
+  const parts = [`${frameworkNames[tester.agent.framework] || tester.agent.framework || "Agent"}`, `${byId("test-method").value} (${byId("test-mode").value === "stream" ? "stream query" : "query"})`];
+  if (tester.session) parts.push(`session ${tester.session.slice(0, 12)}`);
+  setText("test-info", parts.join("  -  "));
+}
+function bubble(kind, text) {
+  const item = element("div", `bubble ${kind}`);
+  if (text !== undefined) item.append(element("p", "", text));
+  byId("test-transcript").append(item); byId("test-transcript").scrollTop = byId("test-transcript").scrollHeight;
+  return item;
+}
+function openTester(agent) {
+  tester.agent = agent; tester.session = "";
+  setText("test-title", agent.display_name || agent.id); setText("test-resource", agent.name);
+  const defaults = testDefaults(agent);
+  const methods = agent.methods?.length ? agent.methods : [defaults.method];
+  byId("test-method").replaceChildren(...methods.map((name) => Object.assign(document.createElement("option"), { value: name, textContent: name })));
+  byId("test-method").value = defaults.method; byId("test-mode").value = defaults.mode;
+  byId("test-input").value = JSON.stringify(defaults.input, null, 2);
+  byId("test-transcript").replaceChildren();
+  bubble("system", "Messages are sent to the deployed agent in Google Cloud. The first reply can take a little longer while the agent warms up.");
+  testInfo();
+  byId("test-drawer").showModal(); icons();
+  byId("test-message").focus();
+}
+async function ensureSession() {
+  const agent = tester.agent;
+  const input = (() => { try { return JSON.parse(byId("test-input").value); } catch { return {}; } })();
+  if (tester.session || !agent.methods?.includes("async_create_session") || byId("test-mode").value !== "stream" || !("user_id" in input)) return;
+  const data = await api("/api/agents/test", { method: "POST", body: JSON.stringify({ name: agent.name, method: "async_create_session", mode: "query", input: { user_id: input.user_id } }) });
+  tester.session = data.output?.id || "";
+  testInfo();
+}
+byId("test-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const message = byId("test-message").value.trim();
+  if (!message || tester.busy) return;
+  let template;
+  try { template = JSON.parse(byId("test-input").value || "{}"); } catch { bubble("error", "Input JSON is not valid JSON."); return; }
+  tester.busy = true; byId("test-send").disabled = true;
+  bubble("user", message); byId("test-message").value = "";
+  const pending = bubble("agent pending"); pending.append(icon("loader-circle", true), element("span", "", "Waiting for the agent...")); icons();
+  try {
+    await ensureSession();
+    const input = fillMessage(template, message);
+    if (tester.session && byId("test-mode").value === "stream" && !input.session_id) input.session_id = tester.session;
+    const started = performance.now();
+    const data = await api("/api/agents/test", { method: "POST", body: JSON.stringify({ name: tester.agent.name, method: byId("test-method").value, mode: byId("test-mode").value, input }) });
+    pending.remove();
+    const reply = bubble("agent");
+    for (const tool of data.tools || []) {
+      const chip = element("div", `tool ${tool.kind}`); chip.append(icon(tool.kind === "call" ? "wrench" : "corner-down-right"), element("code", "", `${tool.name}${tool.kind === "call" ? "(" : " -> "}${tool.data}${tool.kind === "call" ? ")" : ""}`)); reply.append(chip);
+    }
+    reply.append(element("p", "", data.reply || (data.output !== undefined ? JSON.stringify(data.output, null, 2) : "(no text in the response)")));
+    const raw = element("details", "raw"); raw.append(element("summary", "", `Raw response${data.event_count ? ` - ${data.event_count} events` : ""} - ${((performance.now() - started) / 1000).toFixed(1)}s`), element("pre", "", JSON.stringify(data.events || data.output, null, 2)));
+    reply.append(raw); icons();
+  } catch (error) { pending.remove(); bubble("error", error.message); }
+  finally { tester.busy = false; byId("test-send").disabled = false; byId("test-transcript").scrollTop = byId("test-transcript").scrollHeight; byId("test-message").focus(); }
+});
+byId("test-message").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); byId("test-form").requestSubmit(); } });
+byId("test-new-session").addEventListener("click", () => { if (!tester.agent) return; tester.session = ""; byId("test-transcript").replaceChildren(); bubble("system", "New conversation started."); testInfo(); });
+byId("test-method").addEventListener("change", testInfo);
+byId("test-mode").addEventListener("change", testInfo);
+byId("test-close").addEventListener("click", () => byId("test-drawer").close());
+byId("test-deployed").addEventListener("click", () => {
+  const plan = state.plan; if (!plan?.resource) return;
+  openTester({ name: plan.resource, id: plan.resource.split("/").pop(), display_name: plan.display_name, framework: plan.framework,
+    methods: plan.framework === "google-adk" ? ["async_create_session", "async_stream_query"] : ["query"] });
+});
 byId("logs-refresh").addEventListener("click", () => { if (state.plan) loadLogs(state.plan); });
 byId("garden-filter").addEventListener("input", renderGarden);
 

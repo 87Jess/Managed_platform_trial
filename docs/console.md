@@ -111,6 +111,22 @@ Agents deployed by the console are marked. The list is read-only.
 The caller needs `aiplatform.reasoningEngines.list` (for example `roles/aiplatform.viewer`);
 the hosted console's service account already has `roles/aiplatform.user`.
 
+## Test Agents
+
+Every agent card in the Agent garden, and the result panel after a deployment, has a **Test**
+button. It opens a chat panel that calls the deployed agent through the Vertex AI API:
+
+- Google ADK agents: a session is created with `async_create_session`, then each message is sent
+  with `async_stream_query` (`:streamQuery`). The panel shows the reply, the tool calls and tool
+  results the agent made, and the raw events.
+- Other agents: `query` (`:query`) with `{"message": ...}`, or `{"input": ...}` for LangChain,
+  LangGraph and LlamaIndex agents.
+- **Advanced** lets you pick any class method the agent exposes and edit the input JSON;
+  `{message}` is replaced with what you type.
+
+Messages go to the live agent in Google Cloud, which may call models and tools and incur cost.
+The caller needs `aiplatform.reasoningEngines.query` (included in `roles/aiplatform.user`).
+
 ## Quick PoC Deployment
 
 To demonstrate deployment before the platform's service account and private network exist,

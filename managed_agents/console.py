@@ -126,6 +126,13 @@ class DeploymentInput(StrictModel):
     framework: Literal["custom", "google-adk"] = "custom"
 
 
+class AgentTest(StrictModel):
+    name: str = Field(max_length=200)
+    method: str = Field(pattern=r"^[a-zA-Z_]\w{0,79}$")
+    mode: Literal["query", "stream"] = "query"
+    input: dict = Field(default_factory=dict)
+
+
 class Approval(StrictModel):
     digest: str
     project: str
@@ -249,6 +256,37 @@ class AgentEngineCloud:
                           "text": str(payload)[:4000]})
         return lines
 
+    def invoke_agent(self, name: str, method: str, payload: dict, stream: bool):
+        """Call a deployed agent's class method, as the Agent Platform SDK does."""
+        pattern = r"projects/[a-z0-9-]+/locations/" + re.escape(self.config.region) + r"/reasoningEngines/[0-9]+"
+        if not re.fullmatch(pattern, name):
+            raise SourceError("Unexpected agent resource name")
+        base = f"https://{self.config.region}-aiplatform.googleapis.com/v1/{name}"
+        body = {"classMethod": method, "input": payload}
+        with self.session() as client:
+            if not stream:
+                response = client.post(f"{base}:query", json=body, timeout=180)
+                response.raise_for_status()
+                return {"output": response.json().get("output")}
+            events, size = [], 0
+            with client.post(f"{base}:streamQuery?alt=sse", json=body, timeout=180,
+                             stream=True) as response:
+                response.raise_for_status()
+                for raw in response.iter_lines(decode_unicode=True):
+                    line = (raw or "").strip()
+                    if line.startswith("data:"):
+                        line = line[5:].strip()
+                    if not line:
+                        continue
+                    size += len(line)
+                    if size > 400_000 or len(events) >= 300:
+                        break
+                    try:
+                        events.append(json.loads(line))
+                    except ValueError:
+                        events.append(line)
+            return {"events": events}
+
     def list_agents(self, max_pages: int = 5):
         """Agent Engine resources in the project and region (the console's Agent Platform runtimes)."""
         url = (f"https://{self.config.region}-aiplatform.googleapis.com/v1/projects/"
@@ -341,6 +379,30 @@ def log_hints(lines: list[dict]) -> list[str]:
             if hint not in hints:
                 hints.append(hint)
     return hints[:3]
+
+
+def summarize_events(events: list) -> dict:
+    """Pull the reply text and tool activity out of ADK-style stream events."""
+    reply, tools = [], []
+    for event in events:
+        if not isinstance(event, dict):
+            reply.append(str(event))
+            continue
+        content = event.get("content") or {}
+        for part in content.get("parts", []) if isinstance(content, dict) else []:
+            if not isinstance(part, dict):
+                continue
+            if part.get("text") and not part.get("thought"):
+                reply.append(part["text"])
+            call = part.get("function_call") or part.get("functionCall")
+            if call:
+                tools.append({"kind": "call", "name": call.get("name", ""),
+                              "data": json.dumps(call.get("args", {}))[:500]})
+            result = part.get("function_response") or part.get("functionResponse")
+            if result:
+                tools.append({"kind": "result", "name": result.get("name", ""),
+                              "data": json.dumps(result.get("response", {}))[:500]})
+    return {"reply": "".join(reply).strip(), "tools": tools}
 
 
 def operation_error(error: dict) -> str:
@@ -612,6 +674,30 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
             raise HTTPException(502, "Could not reach Cloud Logging; retry") from None
         return {"engine_id": engine_id, "lines": lines, "hints": log_hints(lines),
                 "explorer_url": explorer}
+
+    @app.post("/api/agents/test")
+    def test_agent(data: AgentTest):
+        try:
+            result = cloud.invoke_agent(data.name, data.method, data.input, data.mode == "stream")
+        except SourceError as error:
+            raise HTTPException(400, str(error)) from None
+        except GoogleAuthError:
+            raise HTTPException(502, "Google credentials are unavailable or expired") from None
+        except HTTPError as error:
+            raise HTTPException(502, f"The agent call failed ({google_error(error)})") from None
+        except (RequestException, ValueError):
+            raise HTTPException(502, "Could not reach the agent; it may still be starting. Retry.") from None
+        if data.mode == "stream":
+            summary = summarize_events(result["events"])
+            return {**summary, "events": result["events"][-50:], "event_count": len(result["events"])}
+        output = result["output"]
+        reply = output if isinstance(output, str) else ""
+        if isinstance(output, dict):
+            for key in ("reply", "output", "text", "answer", "response", "content"):
+                if isinstance(output.get(key), str):
+                    reply = output[key]
+                    break
+        return {"reply": reply, "output": output, "tools": []}
 
     @app.get("/api/agents")
     def list_agents():

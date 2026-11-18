@@ -707,3 +707,70 @@ def test_container_logs_queries_cloud_logging(tmp_path):
     assert 'resource.type="aiplatform.googleapis.com/ReasoningEngine"' in body["filter"]
     with pytest.raises(Exception, match="Unexpected"):
         cloud.container_logs('42" OR true', since=0)
+
+
+AGENT = "projects/123/locations/us-central1/reasoningEngines/42"
+ADK_EVENTS = [
+    {"author": "weather", "content": {"role": "model", "parts": [
+        {"function_call": {"name": "get_weather", "args": {"city": "New York"}}}]}},
+    {"author": "weather", "content": {"role": "user", "parts": [
+        {"function_response": {"name": "get_weather", "response": {"status": "success"}}}]}},
+    {"author": "weather", "content": {"role": "model", "parts": [
+        {"text": "It is sunny in New York."}]}},
+]
+
+
+def test_agent_test_endpoint_streams_adk_and_queries_custom(console, monkeypatch):
+    client, cloud, _ = console
+    calls = []
+    def invoke(name, method, payload, stream):
+        calls.append((name, method, payload, stream))
+        return {"events": ADK_EVENTS} if stream else {"output": {"reply": "hello"}}
+    monkeypatch.setattr(cloud, "invoke_agent", invoke, raising=False)
+    streamed = client.post("/api/agents/test", json={
+        "name": AGENT, "method": "async_stream_query", "mode": "stream",
+        "input": {"user_id": "u", "message": "Weather in New York?"}}).json()
+    assert streamed["reply"] == "It is sunny in New York."
+    assert [tool["kind"] for tool in streamed["tools"]] == ["call", "result"]
+    assert streamed["tools"][0]["name"] == "get_weather"
+    assert streamed["event_count"] == 3
+    queried = client.post("/api/agents/test", json={
+        "name": AGENT, "method": "query", "input": {"message": "hi"}}).json()
+    assert queried["reply"] == "hello"
+    assert calls[1] == (AGENT, "query", {"message": "hi"}, False)
+    assert client.post("/api/agents/test", json={"name": AGENT, "method": "bad method!"}).status_code == 422
+    assert not cloud.submissions
+
+
+def test_agent_test_reports_agent_errors(console, monkeypatch):
+    client, cloud, _ = console
+    def failing(*args):
+        raise google_http_error(400, "FAILED_PRECONDITION", "Reasoning Engine is not ready")
+    monkeypatch.setattr(cloud, "invoke_agent", failing, raising=False)
+    response = client.post("/api/agents/test", json={"name": AGENT, "method": "query", "input": {}})
+    assert response.status_code == 502
+    assert "FAILED_PRECONDITION" in response.json()["detail"]
+
+
+def test_invoke_agent_uses_query_and_stream_query(tmp_path):
+    session = MagicMock()
+    session.__enter__.return_value = session
+    query_response, stream_response = MagicMock(), MagicMock()
+    query_response.json.return_value = {"output": {"id": "session-1"}}
+    stream_response.__enter__.return_value = stream_response
+    stream_response.iter_lines.return_value = [
+        'data: {"content": {"parts": [{"text": "Hi"}]}}', "", "data: not-json"]
+    session.post.side_effect = [query_response, stream_response]
+    cloud = AgentEngineCloud(ConsoleConfig(source_root=tmp_path, project="example-project"))
+    cloud.session = lambda: session
+    assert cloud.invoke_agent(AGENT, "async_create_session", {"user_id": "u"}, False) == {
+        "output": {"id": "session-1"}}
+    url, = session.post.call_args_list[0].args
+    assert url == f"https://us-central1-aiplatform.googleapis.com/v1/{AGENT}:query"
+    assert session.post.call_args_list[0].kwargs["json"] == {
+        "classMethod": "async_create_session", "input": {"user_id": "u"}}
+    result = cloud.invoke_agent(AGENT, "async_stream_query", {"message": "hi"}, True)
+    assert result["events"] == [{"content": {"parts": [{"text": "Hi"}]}}, "not-json"]
+    assert session.post.call_args_list[1].args[0].endswith(f"{AGENT}:streamQuery?alt=sse")
+    with pytest.raises(Exception, match="Unexpected agent"):
+        cloud.invoke_agent("projects/x/locations/europe-west1/reasoningEngines/1", "query", {}, False)

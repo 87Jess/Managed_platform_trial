@@ -87,7 +87,8 @@
               <div class="success-head"><i data-lucide="circle-check-big"></i><div><strong>Agent is live on Agent Engine</strong><span id="success-meta"></span></div></div>
               <label class="result-label">Resource name</label>
               <div class="copy-row"><code id="resource-name"></code><button class="icon-button" id="copy-resource" type="button" title="Copy resource name" aria-label="Copy resource name"><i data-lucide="copy"></i></button></div>
-              <a class="button primary open-cloud" id="open-cloud" target="_blank" rel="noreferrer"><i data-lucide="external-link"></i><span>Open Agent Platform runtimes</span></a>
+              <button class="button primary open-cloud" id="test-deployed" type="button"><i data-lucide="message-square"></i><span>Test this agent</span></button>
+              <a class="button secondary open-cloud" id="open-cloud" target="_blank" rel="noreferrer"><i data-lucide="external-link"></i><span>Open Agent Platform runtimes</span></a>
               <details class="file-details" open><summary>Query it from Python</summary><div class="copy-row snippet-row"><pre id="query-snippet" class="snippet"></pre><button class="icon-button" id="copy-snippet" type="button" title="Copy snippet" aria-label="Copy snippet"><i data-lucide="copy"></i></button></div></details>
             </div>
             <dl class="review-properties"><div><dt>Target</dt><dd>Vertex AI Agent Engine</dd></div><div><dt>Project</dt><dd id="review-project"></dd></div><div><dt>Entrypoint</dt><dd id="review-entrypoint"></dd></div><div><dt>Dependencies</dt><dd id="review-dependencies"></dd></div><div><dt>Source size</dt><dd id="review-size"></dd></div><div><dt>SHA-256</dt><dd class="digest-row"><code id="review-digest"></code><button class="icon-button" id="copy-digest" title="Copy source digest" aria-label="Copy source digest" type="button"><i data-lucide="copy"></i></button></dd></div></dl>
@@ -165,5 +166,20 @@
     </main>
   </div>
 
+  <dialog id="test-drawer" class="drawer" aria-labelledby="test-title">
+    <div class="drawer-head"><div class="drawer-title"><div class="eyebrow">TEST AGENT</div><h2 id="test-title">Agent</h2><code id="test-resource"></code></div><button class="icon-button" id="test-close" type="button" aria-label="Close test panel" title="Close"><i data-lucide="x"></i></button></div>
+    <div id="test-info" class="test-info"></div>
+    <div id="test-transcript" class="transcript" aria-live="polite"></div>
+    <form id="test-form" class="test-form">
+      <label class="sr-only" for="test-message">Message</label>
+      <textarea id="test-message" rows="3" placeholder="Ask the agent something, e.g. What's the weather in New York?"></textarea>
+      <details class="file-details test-advanced"><summary>Advanced: method and input</summary>
+        <div class="field-row"><label class="field">Class method<select id="test-method"></select></label><label class="field">Call type<select id="test-mode"><option value="query">Query</option><option value="stream">Stream query</option></select></label></div>
+        <label class="field">Input JSON<textarea id="test-input" rows="4" spellcheck="false"></textarea></label>
+        <span class="test-hint">"{message}" is replaced with the text you type. ADK sessions are added automatically.</span>
+      </details>
+      <div class="drawer-actions"><button class="button secondary" id="test-new-session" type="button"><i data-lucide="rotate-ccw"></i><span>New conversation</span></button><button class="button primary" id="test-send" type="submit"><i data-lucide="send"></i><span>Send</span></button></div>
+    </form>
+  </dialog>
 </body>
 </html>
