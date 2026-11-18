@@ -140,15 +140,49 @@ class Approval(StrictModel):
     approve_code: bool
 
 
+class _ReusedSession:
+    """Context manager that hands out a pooled session without closing it on exit."""
+
+    def __init__(self, cloud, session):
+        self.cloud, self.session = cloud, session
+
+    def __enter__(self):
+        return self.session
+
+    def __exit__(self, exc_type, exc, traceback):
+        if exc_type is not None and issubclass(exc_type, GoogleAuthError):
+            self.cloud.reset_credentials()  # e.g. expired login: re-read ADC next time
+        return False
+
+
 class AgentEngineCloud:
     def __init__(self, config: ConsoleConfig):
         self.config = config
+        self._credentials = None
+        self._sessions = threading.local()
+        self._credentials_lock = threading.Lock()
+
+    def reset_credentials(self):
+        with self._credentials_lock:
+            self._credentials = None
+        self._sessions = threading.local()
 
     def session(self):
-        credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-        if hasattr(credentials, "with_quota_project"):
-            credentials = credentials.with_quota_project(self.config.project)
-        return AuthorizedSession(credentials)
+        """Authorized session reusing one credential (and its access token) and one connection
+        pool per thread. Loading ADC and minting a token on every call made each request slow."""
+        with self._credentials_lock:
+            if self._credentials is None:
+                credentials, _ = google.auth.default(
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"])
+                if hasattr(credentials, "with_quota_project"):
+                    credentials = credentials.with_quota_project(self.config.project)
+                self._credentials = credentials
+            credentials = self._credentials
+        session = getattr(self._sessions, "session", None)
+        if session is None or session.credentials is not credentials:
+            session = AuthorizedSession(credentials)
+            self._sessions.session = session
+        return _ReusedSession(self, session)
 
     def preflight(self):
         project = self.config.project
@@ -699,8 +733,16 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
                     break
         return {"reply": reply, "output": output, "tools": []}
 
+    agents_cache = {"at": 0.0, "data": None}
+
     @app.get("/api/agents")
-    def list_agents():
+    def list_agents(refresh: bool = False):
+        with lock:
+            cached = agents_cache["data"]
+            age = time.time() - agents_cache["at"]
+        if cached is not None and not refresh and age < 60:
+            return {**cached, "cached": True, "age_seconds": round(age)}
+        started = time.perf_counter()
         try:
             engines = cloud.list_agents()
         except GoogleAuthError:
@@ -712,7 +754,11 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
             raise HTTPException(502, "Could not reach Google Cloud to list agents; retry") from None
         agents = sorted((agent_summary(engine) for engine in engines if isinstance(engine, dict)),
                         key=lambda agent: agent["create_time"], reverse=True)
-        return {"project": config.project, "region": config.region, "agents": agents}
+        data = {"project": config.project, "region": config.region, "agents": agents,
+                "fetch_ms": round((time.perf_counter() - started) * 1000)}
+        with lock:
+            agents_cache.update(at=time.time(), data=data)
+        return {**data, "cached": False, "age_seconds": 0}
 
     @app.get("/api/preflight")
     def preflight():
@@ -893,6 +939,7 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
                         plan["logs_url"] = find_logs_url(result["error"])
                     else:
                         plan["status"] = "succeeded"
+                        agents_cache["at"] = 0.0
                         plan["resource"] = result.get("response", {}).get("name", "") or (
                             operation.split("/operations/")[0] if "/reasoningEngines/" in operation else "")
                         plan["message"] = "Agent Engine deployment completed"

@@ -234,3 +234,8 @@ h1{font-size:28px;font-weight:500}
 @media(max-width:600px){main{padding:20px 16px 0}h1,.page-heading h1{font-size:24px}}
 .page-lede{max-width:880px}
 .garden-grid{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}@media(min-width:1700px){.garden-grid{grid-template-columns:repeat(auto-fill,minmax(400px,1fr))}}@media(max-width:600px){.garden-grid{grid-template-columns:1fr}}
+
+.agent-card.skeleton{gap:12px;min-height:220px}
+.bone{display:block;height:12px;border-radius:4px;background:linear-gradient(90deg,#f1f3f4 25%,#e8eaed 50%,#f1f3f4 75%);background-size:200% 100%;animation:shimmer 1.2s ease-in-out infinite}
+.bone:first-child{height:18px}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}

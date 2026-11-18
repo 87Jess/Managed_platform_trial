@@ -774,3 +774,52 @@ def test_invoke_agent_uses_query_and_stream_query(tmp_path):
     assert session.post.call_args_list[1].args[0].endswith(f"{AGENT}:streamQuery?alt=sse")
     with pytest.raises(Exception, match="Unexpected agent"):
         cloud.invoke_agent("projects/x/locations/europe-west1/reasoningEngines/1", "query", {}, False)
+
+
+def test_cloud_session_reuses_credentials_and_resets_after_auth_errors(tmp_path, monkeypatch):
+    from google.auth.exceptions import RefreshError
+
+    from managed_agents import console as console_module
+
+    loads = []
+    class Credentials:
+        def with_quota_project(self, project):
+            return self
+    def default(scopes):
+        loads.append(scopes)
+        return Credentials(), "project"
+    monkeypatch.setattr(console_module.google.auth, "default", default)
+    monkeypatch.setattr(console_module, "AuthorizedSession", lambda credentials: MagicMock(credentials=credentials))
+    cloud = AgentEngineCloud(ConsoleConfig(source_root=tmp_path, project="example-project"))
+    with cloud.session() as first:
+        pass
+    with cloud.session() as second:
+        pass
+    assert len(loads) == 1
+    assert first is second
+    first.close.assert_not_called()
+    with pytest.raises(RefreshError), cloud.session():
+        raise RefreshError("expired")
+    with cloud.session():
+        pass
+    assert len(loads) == 2
+
+
+def test_agent_list_is_cached_until_refresh_or_deploy(console, monkeypatch):
+    client, cloud, source = console
+    calls = []
+    def list_agents():
+        calls.append(1)
+        return [ENGINE]
+    monkeypatch.setattr(cloud, "list_agents", list_agents, raising=False)
+    first = client.get("/api/agents").json()
+    second = client.get("/api/agents").json()
+    assert (first["cached"], second["cached"]) == (False, True)
+    assert len(calls) == 1
+    assert client.get("/api/agents?refresh=1").json()["cached"] is False
+    assert len(calls) == 2
+    plan = plan_for(client, source)
+    approve(client, plan)
+    assert client.get(f"/api/plans/{plan['id']}").json()["status"] == "succeeded"
+    assert client.get("/api/agents").json()["cached"] is False
+    assert len(calls) == 3

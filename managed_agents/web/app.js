@@ -230,14 +230,14 @@ function showView() {
     if (active) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
   });
   setText("breadcrumb-current", viewTitles[view]);
-  if (view === "agents" && !garden.loaded && !garden.loading) loadGarden();
+  if (view === "agents" && !garden.loading && (!garden.loaded || Date.now() - garden.fetchedAt > 60000)) loadGarden();
   document.title = `${viewTitles[view]} | Agent Platform`;
   if (requested && requested !== view) return;
   window.scrollTo({ top: 0 });
 }
 window.addEventListener("hashchange", showView);
 
-const garden = { agents: [], loaded: false, loading: false };
+const garden = { agents: [], loaded: false, loading: false, fetchedAt: 0, fetchMs: 0 };
 const frameworkNames = { "google-adk": "Google ADK", custom: "Custom", langchain: "LangChain", langgraph: "LangGraph", ag2: "AG2", llama_index: "LlamaIndex" };
 function relativeTime(value) {
   const time = Date.parse(value); if (!time) return "unknown";
@@ -282,7 +282,8 @@ function agentCard(agent) {
 function renderGarden() {
   const query = byId("garden-filter").value.trim().toLowerCase();
   const shown = garden.agents.filter((agent) => !query || [agent.display_name, agent.id, agent.framework, agent.description].some((value) => (value || "").toLowerCase().includes(query)));
-  setText("garden-count", garden.loaded ? `${shown.length} of ${garden.agents.length} agent${garden.agents.length === 1 ? "" : "s"}` : "");
+  const freshness = garden.fetchedAt ? ` - updated ${Math.max(0, Math.round((Date.now() - garden.fetchedAt) / 1000))}s ago` : "";
+  setText("garden-count", garden.loaded ? `${shown.length} of ${garden.agents.length} agent${garden.agents.length === 1 ? "" : "s"}${freshness}` : "");
   if (garden.loaded && !garden.agents.length) {
     const empty = element("div", "garden-empty"); empty.append(icon("sprout"), element("strong", "", "No agents in this project and region yet"), element("span", "", "Deploy one from the Deploy agent page and it will appear here."));
     byId("garden-grid").replaceChildren(empty);
@@ -290,21 +291,28 @@ function renderGarden() {
   icons();
 }
 
-async function loadGarden() {
+function gardenSkeleton() {
+  return Array.from({ length: 3 }, () => { const card = element("div", "agent-card skeleton"); for (const width of [55, 30, 90, 75, 60]) { const bar = element("span", "bone"); bar.style.width = `${width}%`; card.append(bar); } return card; });
+}
+
+async function loadGarden(force = false) {
+  if (garden.loading) return;
   garden.loading = true;
   const button = byId("garden-refresh"); button.disabled = true;
-  byId("garden-status").replaceChildren(alertBox("info", "Loading agents from Google Cloud..."));
-  icons();
+  if (!garden.loaded) byId("garden-grid").replaceChildren(...gardenSkeleton());
+  byId("garden-status").replaceChildren();
   try {
-    const data = await api("/api/agents");
+    const data = await api(`/api/agents${force === true ? "?refresh=1" : ""}`);
     garden.agents = data.agents; garden.loaded = true;
+    garden.fetchedAt = Date.now() - (data.age_seconds || 0) * 1000;
     setText("garden-scope", `${data.project} / ${data.region}`);
-    byId("garden-status").replaceChildren();
   } catch (error) {
     byId("garden-status").replaceChildren(alertBox("error", error.message));
-  } finally { garden.loading = false; button.disabled = false; renderGarden(); }
+    if (!garden.loaded) byId("garden-grid").replaceChildren();
+  } finally { garden.loading = false; button.disabled = false; if (garden.loaded) renderGarden(); icons(); }
 }
-byId("garden-refresh").addEventListener("click", loadGarden);
+byId("garden-refresh").addEventListener("click", () => loadGarden(true));
+setInterval(() => { if (garden.loaded && !document.hidden && location.hash === "#agents") renderGarden(); }, 15000);
 
 const tester = { agent: null, session: "", busy: false, userId: "console-tester" };
 function testDefaults(agent) {
@@ -569,6 +577,7 @@ async function initialize() {
     const details = { ...(config.hosted ? { "Hosted on": "Cloud Run (Identity-Aware Proxy)", "Signed in as": config.user } : {}), "Project": config.project, "Region": config.region, ...(config.local_sources_enabled ? { "Allowed source root": config.source_root } : {}), "Runtime service account": config.runtime_account || "Agent Engine default service agent", "PSC attachment": config.network_attachment || "None (public Agent Engine networking)", "Cloud submission": config.deployment_enabled ? "Enabled" : "Locked", "Sandbox host engine": config.sandbox_engine || "Not configured", "Sandbox testing": config.sandbox_enabled ? (config.sandbox_required ? "Required before deploy" : "Enabled") : "Disabled" };
     byId("environment-details").replaceChildren(...Object.entries(details).map(([label, value]) => { const row = document.createElement("div"); const term = document.createElement("dt"); term.textContent = label; const description = document.createElement("dd"); description.textContent = value; row.append(term, description); return row; }));
     updateApproval();
+    if (!garden.loaded && !garden.loading) loadGarden();
     await refreshHistory();
   } catch (error) { showError(error.message); setText("submission-state", "Unavailable"); }
 }
