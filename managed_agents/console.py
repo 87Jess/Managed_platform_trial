@@ -25,6 +25,7 @@ from pydantic import Field
 from requests.exceptions import HTTPError, RequestException
 
 from managed_agents.policy import StrictModel
+from managed_agents.sandbox import SandboxError, SandboxRunner
 from managed_agents.sources import (
     MAX_SOURCE_BYTES,
     Bundle,
@@ -47,6 +48,13 @@ class ConsoleConfig:
     security_review_approved: bool = False
     runtime_account: str = ""
     network_attachment: str = ""
+    sandbox_engine: str = ""
+    allow_sandbox_test: bool = False
+    require_sandbox_test: bool = False
+
+    @property
+    def sandbox_enabled(self):
+        return self.allow_sandbox_test and bool(self.sandbox_engine)
 
     @property
     def account(self):
@@ -68,6 +76,9 @@ class ConsoleConfig:
             security_review_approved=os.environ.get("CONSOLE_SECURITY_REVIEW_APPROVED") == "1",
             runtime_account=os.environ.get("CONSOLE_RUNTIME_ACCOUNT", ""),
             network_attachment=os.environ.get("CONSOLE_NETWORK_ATTACHMENT", ""),
+            sandbox_engine=os.environ.get("CONSOLE_SANDBOX_ENGINE", ""),
+            allow_sandbox_test=os.environ.get("CONSOLE_ALLOW_SANDBOX_TEST") == "1",
+            require_sandbox_test=os.environ.get("CONSOLE_REQUIRE_SANDBOX_TEST") == "1",
         )
 
 
@@ -113,6 +124,10 @@ class AgentEngineCloud:
             ("runtime_account", f"https://iam.googleapis.com/v1/projects/{project}/serviceAccounts/{self.config.account}", "disabled", False),
             ("psc_attachment", f"https://compute.googleapis.com/compute/v1/{self.config.attachment}", "name", None),
         ]
+        if self.config.sandbox_engine:
+            engine_url = (f"https://{self.config.region}-aiplatform.googleapis.com/"
+                          f"v1/{self.config.sandbox_engine}")
+            endpoints.append(("sandbox_engine", engine_url, "name", None))
         try:
             with self.session() as client:
                 for name, url, field, expected in endpoints:
@@ -147,6 +162,26 @@ class AgentEngineCloud:
             )
             response.raise_for_status()
             return response.json()
+
+    def sandbox_test(self, bundle: Bundle, module: str, object_name: str, framework: str):
+        runner = SandboxRunner(self.session, self.config.region, self.config.sandbox_engine)
+        return runner.run(bundle.archive, bundle.digest, module, object_name, framework)
+
+    def create_sandbox_engine(self):
+        """Create an empty Agent Engine instance that only hosts test sandboxes."""
+        with self.session() as client:
+            response = client.post(
+                f"https://{self.config.region}-aiplatform.googleapis.com/v1/projects/"
+                f"{self.config.project}/locations/{self.config.region}/reasoningEngines",
+                json={"displayName": "agent-platform-sandbox-host",
+                      "description": "Hosts code-execution test sandboxes for the deployment console"},
+                timeout=60)
+            response.raise_for_status()
+            operation = response.json()["name"]
+        match = re.match(r"(projects/[^/]+/locations/[^/]+/reasoningEngines/[0-9]+)/operations/", operation)
+        if not match:
+            raise SourceError("Cloud returned an unexpected operation name")
+        return match.group(1)
 
     def status(self, name: str):
         pattern = (r"projects/[a-zA-Z0-9-]+/locations/" + re.escape(self.config.region)
@@ -245,6 +280,25 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None) -> FastAP
     def public_plan(plan):
         return {key: value for key, value in plan.items() if key not in {"bundle", "input"}}
 
+    def run_sandbox_test(plan):
+        data = plan["input"]
+        try:
+            result = cloud.sandbox_test(plan["bundle"], data.module, data.object_name, data.framework)
+        except GoogleAuthError:
+            result = {"status": "error",
+                      "message": "Google Application Default Credentials are unavailable or invalid"}
+        except HTTPError as error:
+            code = error.response.status_code if error.response is not None else 0
+            result = {"status": "error", "message": f"Google Cloud rejected the sandbox request ({code}). "
+                      "Check the sandbox host engine, API enablement and roles/aiplatform.user."}
+        except SandboxError as error:
+            result = {"status": "error", "message": str(error)}
+        except (RequestException, KeyError, ValueError):
+            result = {"status": "error", "message": "The sandbox test could not be completed; retry"}
+        result["finished_at"] = time.time()
+        with lock:
+            plan["sandbox"] = {**plan["sandbox"], **result}
+
     @app.middleware("http")
     async def local_boundary(request: Request, call_next):
         if f"http://{request.headers.get('host', '')}" not in origins:
@@ -289,7 +343,9 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None) -> FastAP
         return {"project": config.project, "region": config.region,
                 "source_root": str(config.source_root), "runtime_account": config.account,
                 "network_attachment": config.attachment,
-                "deployment_enabled": config.allow_deploy and config.security_review_approved}
+                "deployment_enabled": config.allow_deploy and config.security_review_approved,
+                "sandbox_enabled": config.sandbox_enabled, "sandbox_engine": config.sandbox_engine,
+                "sandbox_required": config.require_sandbox_test}
 
     @app.get("/api/preflight")
     def preflight():
@@ -352,7 +408,8 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None) -> FastAP
                 "framework": bundle.framework,
                 "dependency_format": bundle.dependency_format, "requirements_file": bundle.requirements,
                 "created_at": time.time(), "status": "planned", "operation": "", "resource": "",
-                "message": "Snapshot ready for approval", "bundle": bundle, "input": data}
+                "message": "Snapshot ready for approval", "sandbox": {"status": "not_run"},
+                "bundle": bundle, "input": data}
         with lock:
             if len(plans) >= 8:
                 raise HTTPException(429, "Console plan limit reached")
@@ -382,6 +439,8 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None) -> FastAP
                 raise HTTPException(400, "Approve this exact snapshot, project and billable deployment")
             if plan["status"] != "planned":
                 raise HTTPException(409, "This snapshot has already been submitted")
+            if config.require_sandbox_test and plan["sandbox"]["status"] != "passed":
+                raise HTTPException(409, "This snapshot must pass a GCP sandbox test before deployment")
             plan["status"] = "submitting"
         try:
             operation = cloud.submit(deployment_body(config, plan["input"], plan["bundle"]))
@@ -405,6 +464,23 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None) -> FastAP
             with lock:
                 plan["status"] = "unknown"
                 plan["message"] = "Submission could not be confirmed. Check Google Cloud before retrying."
+        with lock:
+            return public_plan(plan)
+
+    @app.post("/api/plans/{plan_id}/sandbox-test")
+    def sandbox_test(plan_id: str):
+        if not config.sandbox_enabled:
+            raise HTTPException(403, "GCP sandbox testing is not enabled by the operator configuration")
+        with lock:
+            cleanup()
+            plan = plans.get(plan_id)
+            if plan is None:
+                raise HTTPException(404, "Plan expired or was not found")
+            if plan["sandbox"]["status"] == "running":
+                raise HTTPException(409, "A sandbox test is already running for this snapshot")
+            plan["sandbox"] = {"status": "running", "started_at": time.time(),
+                               "message": "Creating a code-execution sandbox in Google Cloud"}
+        threading.Thread(target=run_sandbox_test, args=(plan,), daemon=True).start()
         with lock:
             return public_plan(plan)
 
@@ -440,10 +516,18 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None) -> FastAP
 def main():
     parser = argparse.ArgumentParser(description="Local Agent Engine deployment console")
     parser.add_argument("--check-cloud", action="store_true", help="Run read-only GCP prerequisite checks without starting the server")
+    parser.add_argument("--create-sandbox-engine", action="store_true",
+                        help="Create an empty Agent Engine instance to host test sandboxes, then exit")
     args = parser.parse_args()
     config = ConsoleConfig.from_env()
     if args.check_cloud:
         print(json.dumps(AgentEngineCloud(config).preflight(), indent=2), flush=True)
+        return
+    if args.create_sandbox_engine:
+        if not config.allow_sandbox_test:
+            parser.error("Set CONSOLE_ALLOW_SANDBOX_TEST=1 to create the sandbox host engine")
+        engine = AgentEngineCloud(config).create_sandbox_engine()
+        print(f"Set CONSOLE_SANDBOX_ENGINE={engine}", flush=True)
         return
     uvicorn.run(create_console(config), host="127.0.0.1", port=config.port, access_log=False)
 

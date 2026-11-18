@@ -99,6 +99,45 @@ The minimal example is [examples/source-agent/agent.py](../examples/source-agent
 Select the repository's `examples/source-agent` folder, keep module `agent` / object `root_agent`,
 and enter an agent name to review it. This example echoes the provided message; it makes no LLM calls.
 
+## Test in a GCP Sandbox
+
+Before deploying, a reviewed snapshot can be smoke-tested in a Google-managed
+[Agent Engine code-execution sandbox](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/sandbox/code-execution-overview).
+The console never imports the code locally. It sends the snapshot's tar.gz to a new sandbox,
+where a small harness extracts it, imports `module.object` and, for custom agents, calls
+`query(message=...)` once. The result, stdout/stderr and any traceback appear in the review panel.
+The sandbox is created with a 30-minute TTL and deleted as soon as the test finishes.
+
+Sandboxes run under the Google-managed tenant with gVisor isolation, **no network access and no
+credentials for your project**. Only the sandbox's preinstalled Python packages are available, so
+an agent whose dependencies are not preinstalled fails at the import stage with the missing module
+named. Agents that call models or other services at query time will fail those calls in the sandbox;
+treat a pass as "the code loads and its entrypoint runs", not as an end-to-end test.
+
+Sandboxes live under an Agent Engine instance. Create an empty host instance once (no agent code
+is deployed to it):
+
+```bash
+CONSOLE_ALLOW_SANDBOX_TEST=1 uv run python -m managed_agents.console --create-sandbox-engine
+```
+
+Then start the console with:
+
+| Variable | Purpose |
+| --- | --- |
+| `CONSOLE_SANDBOX_ENGINE` | Host instance, `projects/PROJECT/locations/REGION/reasoningEngines/ID` |
+| `CONSOLE_ALLOW_SANDBOX_TEST=1` | Enables the "Test in GCP sandbox" button |
+| `CONSOLE_REQUIRE_SANDBOX_TEST=1` | Optional: block deployment until the snapshot passes a sandbox test |
+
+The operator needs `roles/aiplatform.user` on the project. Sandboxes are billed while they exist.
+The read-only `--check-cloud` report includes the host instance when it is configured.
+
+Not implemented yet: shell sandboxes built from
+[sandbox templates](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/sandbox/manage-templates)
+(which could install requirements when the template allows internet egress) and
+[snapshots](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/sandbox/manage-snapshots)
+of a prepared environment for reuse.
+
 ## Enable Real Deployment
 
 Complete the infrastructure and security gates in [deployment-plan.md](deployment-plan.md),

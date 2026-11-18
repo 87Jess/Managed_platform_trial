@@ -17,6 +17,8 @@ from tests.test_sources import make_zip, uv_source
 class FakeCloud:
     def __init__(self):
         self.submissions = []
+        self.sandbox_tests = []
+        self.sandbox_status = "passed"
 
     def submit(self, body):
         self.submissions.append(body)
@@ -25,6 +27,10 @@ class FakeCloud:
     def status(self, name):
         return {"done": True, "response": {
             "name": "projects/example-project/locations/us-central1/reasoningEngines/456"}}
+
+    def sandbox_test(self, bundle, module, object_name, framework):
+        self.sandbox_tests.append((bundle.digest, module, object_name, framework))
+        return {"status": self.sandbox_status, "message": "fake sandbox result"}
 
 
 @pytest.fixture
@@ -320,3 +326,83 @@ def test_google_operation_failure_is_not_reported_as_success(console, monkeypatc
     plan = plan_for(client, source)
     approve(client, plan)
     assert client.get(f"/api/plans/{plan['id']}").json()["status"] == "failed"
+
+SANDBOX_ENGINE = "projects/example-project/locations/us-central1/reasoningEngines/77"
+
+
+def sandbox_console(tmp_path, monkeypatch, **overrides):
+    web = tmp_path / "web"
+    web.mkdir(exist_ok=True)
+    (web / "index.html").write_text('<meta name="console-token" content="__CONSOLE_TOKEN__">')
+    monkeypatch.setattr("managed_agents.console.WEB_ROOT", web)
+    source = tmp_path / "agent-source"
+    source.mkdir(exist_ok=True)
+    (source / "agent.py").write_text("raise RuntimeError('never execute locally')")
+    (source / "requirements.txt").write_text("")
+    cloud = FakeCloud()
+    settings = {"source_root": tmp_path, "project": "example-project", "allow_deploy": True,
+                "security_review_approved": True, "sandbox_engine": SANDBOX_ENGINE,
+                "allow_sandbox_test": True, **overrides}
+    client = TestClient(create_console(ConsoleConfig(**settings), cloud=cloud),
+                        base_url="http://127.0.0.1:8088")
+    token = re.search('content="([^"]+)"', client.get("/").text).group(1)
+    client.headers.update({"X-Console-Token": token})
+    return client, cloud, source
+
+
+def wait_for_sandbox(client, plan):
+    import time
+    for _ in range(100):
+        current = client.get(f"/api/plans/{plan['id']}").json()
+        if current["sandbox"]["status"] != "running":
+            return current
+        time.sleep(0.02)
+    raise AssertionError("sandbox test did not finish")
+
+
+def test_sandbox_test_runs_reviewed_snapshot_without_deploying(tmp_path, monkeypatch):
+    client, cloud, source = sandbox_console(tmp_path, monkeypatch)
+    plan = plan_for(client, source)
+    assert plan["sandbox"]["status"] == "not_run"
+    started = client.post(f"/api/plans/{plan['id']}/sandbox-test")
+    assert started.status_code == 200
+    finished = wait_for_sandbox(client, plan)
+    assert finished["sandbox"]["status"] == "passed"
+    assert finished["status"] == "planned"
+    assert cloud.sandbox_tests == [(plan["digest"], "agent", "root_agent", "custom")]
+    assert not cloud.submissions
+    assert client.get("/api/config").json()["sandbox_enabled"] is True
+
+
+@pytest.mark.parametrize("overrides", [{"allow_sandbox_test": False}, {"sandbox_engine": ""}])
+def test_sandbox_test_locked_unless_enabled_and_configured(tmp_path, monkeypatch, overrides):
+    client, cloud, source = sandbox_console(tmp_path, monkeypatch, **overrides)
+    plan = plan_for(client, source)
+    assert client.post(f"/api/plans/{plan['id']}/sandbox-test").status_code == 403
+    assert not cloud.sandbox_tests
+
+
+def test_required_sandbox_test_blocks_deploy_until_passed(tmp_path, monkeypatch):
+    client, cloud, source = sandbox_console(tmp_path, monkeypatch, require_sandbox_test=True)
+    plan = plan_for(client, source)
+    assert approve(client, plan).status_code == 409
+    cloud.sandbox_status = "failed"
+    client.post(f"/api/plans/{plan['id']}/sandbox-test")
+    wait_for_sandbox(client, plan)
+    assert approve(client, plan).status_code == 409
+    cloud.sandbox_status = "passed"
+    client.post(f"/api/plans/{plan['id']}/sandbox-test")
+    wait_for_sandbox(client, plan)
+    assert approve(client, plan).json()["status"] == "deploying"
+
+
+def test_sandbox_errors_do_not_leak_details(tmp_path, monkeypatch):
+    client, cloud, source = sandbox_console(tmp_path, monkeypatch)
+    def reject(*args):
+        raise DefaultCredentialsError("private credential path")
+    monkeypatch.setattr(cloud, "sandbox_test", reject)
+    plan = plan_for(client, source)
+    client.post(f"/api/plans/{plan['id']}/sandbox-test")
+    result = wait_for_sandbox(client, plan)["sandbox"]
+    assert result["status"] == "error"
+    assert "private" not in str(result)

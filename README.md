@@ -49,8 +49,11 @@ cost drivers and the approval checklist. **Do not deploy workloads until those g
 3. `gcloud auth application-default login`, then set `CONSOLE_ALLOW_DEPLOY=1` and
    `CONSOLE_SECURITY_REVIEW_APPROVED=1` once the security gates are met.
 4. `uv run python -m managed_agents.console`, pick a folder / GitHub commit / ZIP,
-   review the snapshot, approve, and the console creates the Agent Engine resource
-   and tracks the operation until it completes.
+   review the snapshot, optionally **Test in GCP sandbox**, approve, and the console
+   creates the Agent Engine resource and tracks the operation until it completes.
+
+Sandbox testing runs the snapshot in an isolated Agent Engine code-execution sandbox
+before deployment; see [docs/console.md](docs/console.md#test-in-a-gcp-sandbox).
 
 ## Local Checks
 

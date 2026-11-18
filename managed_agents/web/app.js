@@ -6,6 +6,7 @@ const token = document.querySelector('meta[name="console-token"]').content;
 const statusNames = { planned: "Awaiting approval", submitting: "Submitting", deploying: "Deploying", succeeded: "Deployed", failed: "Failed", unknown: "Needs verification" };
 const sourceNames = { local: "Local folder", github: "GitHub", zip: "ZIP upload" };
 const sourceIcons = { local: "folder", github: "github", zip: "file-archive" };
+const sandboxNames = { not_run: "GCP sandbox test not run", running: "Testing in GCP sandbox", passed: "Sandbox test passed", failed: "Sandbox test failed", error: "Sandbox test could not run" };
 
 function icons() { if (globalThis.lucide) globalThis.lucide.createIcons(); }
 function setText(id, value) { byId(id).textContent = value; }
@@ -80,8 +81,11 @@ function selectFile(file) {
 }
 
 function updateApproval() {
-  const canDeploy = state.config?.deployment_enabled && state.plan?.status === "planned" && !state.busy
+  const sandboxStatus = state.plan?.sandbox?.status;
+  const sandboxOk = !state.config?.sandbox_required || sandboxStatus === "passed";
+  const canDeploy = state.config?.deployment_enabled && state.plan?.status === "planned" && !state.busy && sandboxOk
     && byId("approve-deployment").checked && byId("confirm-project").value === state.config.project;
+  byId("sandbox-button").disabled = !state.config?.sandbox_enabled || !state.plan || state.busy || sandboxStatus === "running";
   byId("deploy-button").disabled = !canDeploy;
   byId("lock-state").hidden = Boolean(state.config?.deployment_enabled);
 }
@@ -115,10 +119,24 @@ function showPlan(plan, resetApproval = false) {
   byId("operation-result").hidden = !plan.operation;
   setText("operation-name", plan.resource || plan.operation);
   byId("cloud-link").href = `https://console.cloud.google.com/vertex-ai/agents/agent-engines?project=${encodeURIComponent(plan.project)}`;
+  renderSandbox(plan.sandbox || { status: "not_run" });
   if (resetApproval) { byId("approve-deployment").checked = false; byId("confirm-project").value = ""; }
   byId("confirm-project").placeholder = plan.project;
   updateApproval();
   icons();
+}
+
+function renderSandbox(sandbox) {
+  const running = sandbox.status === "running";
+  const iconName = running ? "loader-circle" : sandbox.status === "passed" ? "circle-check" : ["failed", "error"].includes(sandbox.status) ? "circle-alert" : "flask-conical";
+  byId("sandbox-icon").replaceChildren(icon(iconName, running));
+  setText("sandbox-title", sandboxNames[sandbox.status] || sandbox.status);
+  const fallback = state.config?.sandbox_enabled ? "Runs this snapshot in an isolated Agent Engine code-execution sandbox before deployment." : "Sandbox testing is disabled. Set CONSOLE_SANDBOX_ENGINE and CONSOLE_ALLOW_SANDBOX_TEST=1.";
+  setText("sandbox-message", sandbox.message || fallback);
+  const log = [sandbox.details?.query_output && `query() returned: ${sandbox.details.query_output}`, sandbox.stdout && `stdout:\n${sandbox.stdout}`, sandbox.stderr && `stderr:\n${sandbox.stderr}`, sandbox.details?.traceback].filter(Boolean).join("\n\n");
+  byId("sandbox-output").hidden = !log;
+  setText("sandbox-log", log);
+  byId("sandbox-section").hidden = state.plan?.status !== "planned" && sandbox.status === "not_run";
 }
 
 function renderHistory() {
@@ -151,7 +169,7 @@ async function refreshHistory() {
     const data = await api("/api/plans");
     state.plans = data.plans;
     for (let index = 0; index < state.plans.length; index += 1) {
-      if (state.plans[index].status === "deploying") state.plans[index] = await api(`/api/plans/${state.plans[index].id}`);
+      if (state.plans[index].status === "deploying" || state.plans[index].sandbox?.status === "running") state.plans[index] = await api(`/api/plans/${state.plans[index].id}`);
     }
     const current = state.plans.find((plan) => plan.id === state.plan?.id);
     if (current) showPlan(current);
@@ -202,6 +220,15 @@ byId("deploy-button").addEventListener("click", async () => {
     await refreshHistory();
   } catch (error) { showError(error.message); }
   finally { setBusy(false); selectRequiredFields(); }
+});
+
+byId("sandbox-button").addEventListener("click", async () => {
+  if (byId("sandbox-button").disabled || !state.plan) return;
+  clearError();
+  try {
+    showPlan(await api(`/api/plans/${state.plan.id}/sandbox-test`, { method: "POST" }));
+    await refreshHistory();
+  } catch (error) { showError(error.message); }
 });
 
 byId("deployment-form").addEventListener("input", (event) => { if (event.target.name !== "source-kind") invalidatePlan(); });
@@ -259,7 +286,7 @@ async function initialize() {
     setText("target-project", config.project); setText("target-region", config.region); setText("allowed-root", config.source_root); setText("runtime-account", config.runtime_account);
     byId("local-path").placeholder = config.source_root;
     byId("submission-state").replaceChildren(Object.assign(document.createElement("span"), { className: `status-dot${config.deployment_enabled ? "" : " warning"}` }), document.createTextNode(config.deployment_enabled ? "Enabled" : "Locked"));
-    const details = { "Project": config.project, "Region": config.region, "Allowed source root": config.source_root, "Runtime service account": config.runtime_account, "PSC attachment": config.network_attachment, "Cloud submission": config.deployment_enabled ? "Enabled" : "Locked" };
+    const details = { "Project": config.project, "Region": config.region, "Allowed source root": config.source_root, "Runtime service account": config.runtime_account, "PSC attachment": config.network_attachment, "Cloud submission": config.deployment_enabled ? "Enabled" : "Locked", "Sandbox host engine": config.sandbox_engine || "Not configured", "Sandbox testing": config.sandbox_enabled ? (config.sandbox_required ? "Required before deploy" : "Enabled") : "Disabled" };
     byId("environment-details").replaceChildren(...Object.entries(details).map(([label, value]) => { const row = document.createElement("div"); const term = document.createElement("dt"); term.textContent = label; const description = document.createElement("dd"); description.textContent = value; row.append(term, description); return row; }));
     updateApproval();
     await refreshHistory();
