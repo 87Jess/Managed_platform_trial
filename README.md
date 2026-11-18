@@ -65,8 +65,11 @@ uv run python -m ruff check .
 Windows application control can block generated launchers. Use
 `.\.venv\Scripts\python.exe -m pytest -q` rather than the `pytest.exe` launcher.
 
-To run the API, populate local environment variables using the names in
-[.env.example](.env.example). No development authentication bypass is provided.
+To run the API, set `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `ENTRA_TENANT_ID`,
+`ENTRA_AUDIENCE`, `APP_TOKEN_SHA256`, `REGISTRY_PATH`, `ENTRA_JWKS_PATH`, `HOST` and `PORT`
+(the console also reads `CONSOLE_PORT`, `CONSOLE_SOURCE_ROOT`, `CONSOLE_ALLOW_DEPLOY`,
+`CONSOLE_SECURITY_REVIEW_APPROVED`, `CONSOLE_RUNTIME_ACCOUNT` and `CONSOLE_NETWORK_ATTACHMENT`).
+No development authentication bypass is provided.
 Obtain your tenant's signing-key snapshot from
 `https://login.microsoftonline.com/TENANT_ID/discovery/v2.0/keys`, verify it through
 your identity-administration process, and place it at the configured `ENTRA_JWKS_PATH`.
