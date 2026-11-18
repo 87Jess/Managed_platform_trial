@@ -198,7 +198,8 @@ class AgentEngineCloud:
             self.config.allow_deploy and self.config.security_review_approved) else "blocked",
             "message": "Cloud submission enabled" if (
                 self.config.allow_deploy and self.config.security_review_approved) else
-            "Console is locked: operator deployment and security approval flags are not both enabled"}]
+            "Console is locked. Restart it with: uv run python -m managed_agents.console --poc "
+            "(or set CONSOLE_ALLOW_DEPLOY=1 and CONSOLE_SECURITY_REVIEW_APPROVED=1)"}]
         endpoints = [
             ("billing", f"https://cloudbilling.googleapis.com/v1/projects/{project}/billingInfo", "billingEnabled", True),
             ("vertex_api", f"https://serviceusage.googleapis.com/v1/projects/{project}/services/aiplatform.googleapis.com", "state", "ENABLED"),
@@ -231,7 +232,11 @@ class AgentEngineCloud:
                                            "message": "Verified" if passed else "Required resource is disabled or not ready"})
                         else:
                             checks.append({"id": name, "status": "missing" if response.status_code == 404 else "unknown",
-                                "message": "Resource was not found" if response.status_code == 404 else
+                                "message": ("Resource was not found" + (
+                                    ". Create it with Terraform, or restart with --poc to use the default identity"
+                                    if name == "runtime_account" else
+                                    ". Create it with Terraform, or restart with --poc to skip private networking"
+                                    if name == "psc_attachment" else "")) if response.status_code == 404 else
                                 f"Could not verify (HTTP {response.status_code}); check API access and IAM"})
                     except (RequestException, ValueError):
                         checks.append({"id": name, "status": "unknown", "message": "Read-only cloud check failed; retry or check API access"})
@@ -991,12 +996,24 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
     return app
 
 
+POC_SETTINGS = {"CONSOLE_ALLOW_DEPLOY": "1", "CONSOLE_SECURITY_REVIEW_APPROVED": "1",
+                "CONSOLE_RUNTIME_ACCOUNT": "default", "CONSOLE_NETWORK_ATTACHMENT": "none"}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Local Agent Engine deployment console")
     parser.add_argument("--check-cloud", action="store_true", help="Run read-only GCP prerequisite checks without starting the server")
     parser.add_argument("--create-sandbox-engine", action="store_true",
                         help="Create an empty Agent Engine instance to host test sandboxes, then exit")
+    parser.add_argument("--poc", action="store_true",
+                        help="Demo mode: unlock deploys, run agents as the Agent Engine default service agent and "
+                             "skip private networking (same as CONSOLE_ALLOW_DEPLOY=1, "
+                             "CONSOLE_SECURITY_REVIEW_APPROVED=1, CONSOLE_RUNTIME_ACCOUNT=default, "
+                             "CONSOLE_NETWORK_ATTACHMENT=none). Values you set explicitly still win.")
     args = parser.parse_args()
+    if args.poc:
+        for name, value in POC_SETTINGS.items():
+            os.environ.setdefault(name, value)
     config = ConsoleConfig.from_env()
     if args.check_cloud:
         print(json.dumps(AgentEngineCloud(config).preflight(), indent=2), flush=True)
@@ -1023,6 +1040,11 @@ def main():
           f" CONSOLE_SECURITY_REVIEW_APPROVED={int(config.security_review_approved)})", flush=True)
     print(f"  Runtime account: {config.account or 'Agent Engine default service agent'}", flush=True)
     print(f"  Network attachment: {config.attachment or 'none'}", flush=True)
+    if args.poc:
+        print("  Demo mode (--poc): default identity and standard networking; not the platform's security design.",
+              flush=True)
+    elif not (config.allow_deploy and config.security_review_approved):
+        print("  To deploy for a demo, restart with: uv run python -m managed_agents.console --poc", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=config.port, access_log=False)
 
 

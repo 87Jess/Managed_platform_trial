@@ -133,10 +133,12 @@ To demonstrate deployment before the platform's service account and private netw
 start the console with:
 
 ```powershell
-$env:CONSOLE_ALLOW_DEPLOY="1"; $env:CONSOLE_SECURITY_REVIEW_APPROVED="1"
-$env:CONSOLE_RUNTIME_ACCOUNT="default"; $env:CONSOLE_NETWORK_ATTACHMENT="none"
-uv run python -m managed_agents.console
+uv run python -m managed_agents.console --poc
 ```
+
+`--poc` is the same as setting `CONSOLE_ALLOW_DEPLOY=1`, `CONSOLE_SECURITY_REVIEW_APPROVED=1`,
+`CONSOLE_RUNTIME_ACCOUNT=default` and `CONSOLE_NETWORK_ATTACHMENT=none`; it needs no
+environment variables, so it survives opening a new terminal. Variables you set yourself win.
 
 `default` runs the agent as the Agent Engine default service agent, which has Vertex AI access
 in the project; `none` omits the PSC interface, so the agent uses Agent Engine's standard

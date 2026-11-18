@@ -894,3 +894,20 @@ def test_rejected_method_schema_falls_back_to_message(console, monkeypatch):
     assert plan["class_methods"][0]["parameters"]["required"] == ["question"]
     assert approve(client, plan).json()["status"] == "deploying"
     assert cloud.submissions[0]["spec"]["classMethods"][0]["parameters"]["required"] == ["message"]
+
+
+def test_poc_flag_unlocks_with_default_identity_and_network(monkeypatch, capsys):
+    from managed_agents import console as module
+
+    for name in module.POC_SETTINGS:  # setenv first so monkeypatch restores them after main() sets them
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
+    started = {}
+    monkeypatch.setattr(module.uvicorn, "run", lambda app, **kwargs: started.update(kwargs))
+    monkeypatch.setattr("sys.argv", ["console", "--poc"])
+    module.main()
+    config = module.ConsoleConfig.from_env()
+    assert config.allow_deploy and config.security_review_approved
+    assert config.account == "" and config.attachment == ""
+    assert started["host"] == "127.0.0.1"
+    assert "Cloud submission: ENABLED" in capsys.readouterr().out

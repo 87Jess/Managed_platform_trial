@@ -2,7 +2,9 @@
 
 ## Deployment Frontend
 
-Run `uv run python -m managed_agents.console` and open `http://127.0.0.1:8088`.
+Run `uv run python -m managed_agents.console` and open `http://127.0.0.1:8088`. For a demo
+deployment before the Terraform service account and network exist, add `--poc` (see
+[docs/console.md](docs/console.md#quick-poc-deployment)).
 Select a local folder, public GitHub repository at a pinned commit, or ZIP upload;
 review the immutable snapshot; then explicitly approve deployment to Agent Engine.
 Cloud submission is locked until the operator configures ADC and enables the approval gates.
