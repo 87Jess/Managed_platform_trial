@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "enabled": false,
+  "agents": [
+    {
+      "id": "research",
+      "enabled": false,
+      "engine_resource": "",
+      "allowed_roles": ["research.read"],
+      "connectors": ["documents"],
+      "model_aliases": ["fast"],
+      "data_class": "internal",
+      "max_steps": 1
+    }
+  ],
+  "connectors": [
+    {
+      "id": "documents",
+      "enabled": false,
+      "kind": "storage",
+      "bucket": "itsai-mai-gcp-lab-proj-platform-documents",
+      "prefix": "approved/",
+      "allowed_roles": ["documents.read"],
+      "data_class": "internal"
+    }
+  ],
+  "models": [
+    {
+      "id": "fast",
+      "enabled": false,
+      "model": "gemini-2.5-flash",
+      "data_classes": ["public", "internal"],
+      "max_output_tokens": 1024
+    }
+  ]
+}
