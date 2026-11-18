@@ -288,7 +288,8 @@ def test_real_frontend_and_assets_are_served(tmp_path, monkeypatch):
         assert "__CONSOLE_TOKEN__" not in page.text
         assert "Deployment review" in page.text
         assert "frame-ancestors 'none'" in page.headers["content-security-policy"]
-        for asset in ["app.js", "styles.css", "lucide.js", "cloud.svg", "plex.woff2"]:
+        for asset in ["app.js", "styles.css", "lucide.js", "cloud.svg", "jakarta.woff2",
+                      "newsreader.woff2", "geist-mono.woff2"]:
             assert client.get(f"/static/{asset}").status_code == 200
 
 
