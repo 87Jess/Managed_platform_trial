@@ -183,8 +183,29 @@ function renderSandbox(sandbox) {
   byId("sandbox-section").hidden = state.plan?.status !== "planned" && sandbox.status === "not_run";
 }
 
+const viewTitles = { deploy: "Deploy agent", history: "Deployment history", environment: "Environment" };
+function showView() {
+  const requested = location.hash.slice(1);
+  const view = viewTitles[requested] ? requested : "deploy";
+  document.querySelectorAll("section.view").forEach((section) => { section.hidden = section.dataset.view !== view; });
+  document.querySelectorAll(".nav-link[data-view]").forEach((link) => {
+    const active = link.dataset.view === view;
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
+  });
+  setText("breadcrumb-current", viewTitles[view]);
+  document.title = `${viewTitles[view]} | Agent Platform`;
+  if (requested && requested !== view) return;
+  window.scrollTo({ top: 0 });
+}
+window.addEventListener("hashchange", showView);
+
 function renderHistory() {
   setText("history-count", String(state.plans.length));
+  setText("stat-total", String(state.plans.length));
+  setText("stat-succeeded", String(state.plans.filter((plan) => plan.status === "succeeded").length));
+  setText("stat-active", String(state.plans.filter((plan) => ["submitting", "deploying"].includes(plan.status)).length));
+  setText("stat-failed", String(state.plans.filter((plan) => ["failed", "unknown"].includes(plan.status)).length));
   if (!state.plans.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td"); cell.colSpan = 6; cell.className = "empty-history";
@@ -203,7 +224,7 @@ function renderHistory() {
     if (plan.resource) { const link = document.createElement("a"); link.className = "history-link"; link.href = cloudConsoleUrl(plan.project); link.target = "_blank"; link.rel = "noreferrer"; link.title = plan.resource; link.append(document.createTextNode(`Engine ${plan.resource.split("/").pop()}`), icon("external-link")); cloud.append(link); }
     else cloud.textContent = plan.operation ? "Building..." : "-";
     const action = document.createElement("td"); const button = document.createElement("button"); button.type = "button"; button.className = "icon-button"; button.title = "Open deployment"; button.setAttribute("aria-label", `Open ${plan.display_name}`); button.append(icon("arrow-up-right"));
-    button.addEventListener("click", () => { if (!state.busy) { showPlan(plan, true); byId("review-title").scrollIntoView({ behavior: "smooth", block: "start" }); } }); action.append(button);
+    button.addEventListener("click", () => { if (!state.busy) { showPlan(plan, true); location.hash = "#deploy"; requestAnimationFrame(() => byId("review-title").scrollIntoView({ behavior: "smooth", block: "start" })); } }); action.append(button);
     row.append(name, source, time, status, cloud, action); return row;
   }));
   icons();
@@ -297,8 +318,7 @@ byId("clear-uploads").addEventListener("click", async () => {
   finally { setBusy(false); selectRequiredFields(); }
 });
 byId("refresh-history").addEventListener("click", refreshHistory);
-byId("new-button").addEventListener("click", () => { byId("deployment-form").reset(); state.file = null; state.uploadId = null; const kind = state.config?.local_sources_enabled === false ? "github" : "local"; document.querySelector(`input[name="source-kind"][value="${kind}"]`).checked = true; selectSource(kind); setText("upload-name", "Choose ZIP archive"); setText("upload-size", "8 MiB maximum"); clearError(); byId("new-deployment").scrollIntoView({ behavior: "smooth" }); byId("local-path").focus({ preventScroll: true }); });
-byId("environment-button").addEventListener("click", () => byId("environment-dialog").showModal());
+byId("new-button").addEventListener("click", () => { if (location.hash && location.hash !== "#deploy") location.hash = "#deploy"; byId("deployment-form").reset(); state.file = null; state.uploadId = null; const kind = state.config?.local_sources_enabled === false ? "github" : "local"; document.querySelector(`input[name="source-kind"][value="${kind}"]`).checked = true; selectSource(kind); setText("upload-name", "Choose ZIP archive"); setText("upload-size", "8 MiB maximum"); clearError(); byId("new-deployment").scrollIntoView({ behavior: "smooth" }); byId("local-path").focus({ preventScroll: true }); });
 byId("framework").addEventListener("change", () => { setText("framework-label", byId("framework").value === "google-adk" ? "Google ADK" : "Custom agent"); invalidatePlan(); });
 byId("check-cloud").addEventListener("click", async () => {
   const button = byId("check-cloud");
@@ -322,7 +342,6 @@ byId("check-cloud").addEventListener("click", async () => {
   } catch (error) { pending.textContent = error.message; }
   finally { button.disabled = false; }
 });
-byId("close-environment").addEventListener("click", () => byId("environment-dialog").close());
 async function copyText(text, button) { try { await navigator.clipboard.writeText(text); button.title = "Copied"; } catch { showError("Clipboard unavailable."); } }
 byId("copy-resource").addEventListener("click", () => copyText(byId("resource-name").textContent, byId("copy-resource")));
 byId("copy-snippet").addEventListener("click", () => copyText(byId("query-snippet").textContent, byId("copy-snippet")));
@@ -334,11 +353,14 @@ byId("download-plan").addEventListener("click", () => {
 });
 
 async function initialize() {
-  icons(); selectSource("local");
+  showView(); icons(); selectSource("local");
   try {
     state.config = await api("/api/config");
     const config = state.config;
     setText("target-project", config.project); setText("target-region", config.region);
+    setText("summary-project", config.project); setText("summary-region", config.region);
+    byId("summary-submission").replaceChildren(Object.assign(document.createElement("span"), { className: `status-dot${config.deployment_enabled ? "" : " warning"}` }), document.createTextNode(config.deployment_enabled ? "Cloud submission enabled" : "Cloud submission locked"));
+    byId("history-cloud-link").href = cloudConsoleUrl(config.project);
     setText("target-identity", config.runtime_account || "Agent Engine default service agent");
     setText("target-network", config.network_attachment ? `PSC: ${config.network_attachment.split("/").pop()}` : "Public (no PSC attachment)"); setText("allowed-root", config.source_root); setText("runtime-account", config.runtime_account || "Agent Engine default service agent");
     byId("local-path").placeholder = config.source_root;
