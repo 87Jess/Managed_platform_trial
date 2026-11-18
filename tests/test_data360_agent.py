@@ -173,3 +173,28 @@ def test_accepts_other_input_field_names():
     assert agent.query(prompt="hello")["reply"] == "Hello again."
     with pytest.raises(ValueError, match="non-empty"):
         agent.query()
+
+
+def test_answers_even_when_the_data_server_is_unreachable():
+    import httpx
+
+    class Down(FakeClient):
+        def list_tools(self):
+            raise httpx.ConnectError("connection refused")
+
+    model = ScriptedModel([AIMessage(content="I can't reach the Data360 service right now.")])
+    agent, _ = agent_with(model, Down())
+    result = agent.query(message="GDP of India?")
+    assert result["reply"].startswith("I can't reach")
+    assert "ConnectError" in result["tools_unavailable"]
+    assert model.tools is None  # no tools bound
+    assert "unavailable right now" in model.seen[0][0].content
+
+
+def test_history_is_passed_to_the_model():
+    model = ScriptedModel([AIMessage(content="In 2023 it was 3.6 trillion US$.")])
+    agent, _ = agent_with(model)
+    agent.query(message="and in 2023?", history=[{"role": "user", "content": "GDP of India?"},
+                                                 {"role": "assistant", "content": "3.9 trillion US$ in 2024."}])
+    sent = model.seen[0]
+    assert [message.type for message in sent] == ["system", "human", "ai", "human"]

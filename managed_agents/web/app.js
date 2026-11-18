@@ -474,7 +474,9 @@ async function loadGarden(force = false) {
 }
 
 /* ---------- Test drawer ---------- */
-const tester = { agent: null, session: "", busy: false, userId: "console-tester" };
+const tester = { agent: null, session: "", busy: false, userId: "console-tester", turns: [] };
+// Agents whose method takes a `history` list get the conversation so far (role/content turns).
+const takesHistory = () => byId("test-mode").value === "query" && tester.agent?.method_schemas?.[byId("test-method").value]?.properties?.history !== undefined;
 function testDefaults(agent) {
   const methods = agent.methods || [];
   const textKey = ["langchain", "langgraph", "llama_index"].includes(agent.framework) ? "input" : "message";
@@ -608,7 +610,7 @@ function toolChips(output) {
   });
 }
 function openTester(agent) {
-  tester.agent = agent; tester.session = "";
+  tester.agent = agent; tester.session = ""; tester.turns = [];
   paintAvatar(byId("test-avatar"), agent.display_name || agent.id);
   setText("test-title", agent.display_name || agent.id); setText("test-resource", agent.name);
   const defaults = testDefaults(agent);
@@ -803,6 +805,7 @@ byId("test-form").addEventListener("submit", async (event) => {
   try {
     await ensureSession();
     const input = fillMessage(template, message);
+    if (takesHistory() && !("history" in input) && tester.turns.length) input.history = tester.turns.slice(-10);
     if (tester.session && byId("test-mode").value === "stream" && !input.session_id) input.session_id = tester.session;
     const started = performance.now();
     const data = await api("/api/agents/test", { method: "POST", body: JSON.stringify({ name: tester.agent.name, method: byId("test-method").value, mode: byId("test-mode").value, input }) });
@@ -821,6 +824,8 @@ byId("test-form").addEventListener("submit", async (event) => {
     if (!data.reply && mcpText) data.reply = mcpText;
     const structured = !data.reply && data.output !== undefined && data.output !== null && typeof data.output === "object";
     const silent = data.events ? (data.tools?.length ? "The agent used its tools but didn't write a reply. Its tool results are above, and the raw events are below." : "The agent didn't send any text back. Open the raw response below to see what it returned.") : "(no text in the response)";
+    if (data.reply && takesHistory()) tester.turns.push({ role: "user", content: message }, { role: "assistant", content: data.reply });
+    if (data.output?.tools_unavailable) reply.append(el("div", "bubble error", `The agent couldn't reach its data tools: ${data.output.tools_unavailable}`));
     if (data.reply || data.output !== undefined || !data.errors?.length) reply.append(el("div", structured ? "text json" : "text", data.reply || (data.output !== undefined ? JSON.stringify(data.output, null, 2) : silent)));
     for (const problem of data.errors || []) reply.append(el("div", "bubble error", `The agent reported an error: ${problem}`));
     const chips = toolChips(data.output);
@@ -844,7 +849,7 @@ byId("test-form").addEventListener("submit", async (event) => {
 });
 byId("test-message").addEventListener("input", autosize);
 byId("test-message").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); byId("test-form").requestSubmit(); } });
-byId("test-new-session").addEventListener("click", () => { if (!tester.agent) return; tester.session = ""; byId("test-transcript").replaceChildren(); bubble("system", "Fresh conversation. The agent won't remember the last one."); testInfo(); });
+byId("test-new-session").addEventListener("click", () => { if (!tester.agent) return; tester.session = ""; tester.turns = []; byId("test-transcript").replaceChildren(); bubble("system", "Fresh conversation. The agent won't remember the last one."); testInfo(); });
 byId("test-method").addEventListener("change", () => applyMethod(byId("test-method").value));
 byId("test-mode").addEventListener("change", testInfo);
 byId("test-close").addEventListener("click", () => byId("test-drawer").close());

@@ -41,6 +41,11 @@ default service agent normally has it) and the runtime needs outbound HTTPS to
 * JSON commands for debugging: `{"action": "list_tools"}` or
   `{"action": "call_tool", "name": "TOOL", "arguments": {...}}` sent as the message.
 
+If the Data360 server can't be reached (for example the runtime has no outbound internet),
+the agent still replies, says it can't fetch data, and adds `tools_unavailable` with the reason;
+the console shows that reason above the reply. The console's Chat also sends earlier turns as
+`history`, so follow-up questions ("and in 2023?") work.
+
 Tool results are treated as data, capped at 12,000 characters each, and the loop stops after
 8 tool rounds with a request to narrow the question.
 
