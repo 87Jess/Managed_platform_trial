@@ -1,3 +1,4 @@
+import ast
 import gzip
 import hashlib
 import io
@@ -134,6 +135,102 @@ class Bundle:
     entrypoint_module: str = ""
     entrypoint_object: str = "root_agent"
     framework: str = "custom"
+    class_methods: tuple = ()
+    methods_inferred: bool = False
+
+
+# Agent Engine method names and how they are invoked (:query vs :streamQuery, sync vs async).
+API_MODES = {"query": "", "stream_query": "stream", "async_query": "async", "async_stream_query": "async_stream"}
+DEFAULT_METHODS = ({"name": "query", "api_mode": "", "parameters": {
+    "type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}},)
+
+
+def _annotation_schema(node) -> dict:
+    """JSON schema for a parameter annotation, from its source text only."""
+    if node is None:
+        return {}
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):  # X | None
+        parts = [side for side in (node.left, node.right)
+                 if not (isinstance(side, ast.Constant) and side.value is None)]
+        return _annotation_schema(parts[0]) if len(parts) == 1 else {}
+    if isinstance(node, ast.Subscript):
+        outer = node.value.id if isinstance(node.value, ast.Name) else getattr(node.value, "attr", "")
+        if outer == "Optional":
+            return _annotation_schema(node.slice)
+        node = node.value
+    name = node.id if isinstance(node, ast.Name) else getattr(node, "attr", "")
+    kind = {"str": "string", "int": "integer", "float": "number", "bool": "boolean", "dict": "object",
+            "Dict": "object", "list": "array", "List": "array", "Mapping": "object",
+            "Sequence": "array"}.get(name)
+    return {"type": kind} if kind else {}
+
+
+def _method_schema(function) -> dict:
+    args = function.args
+    positional = [*args.posonlyargs, *args.args][1:]  # drop self
+    defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
+    properties, required = {}, []
+    for arg, default in [*zip(positional, defaults, strict=True),
+                         *zip(args.kwonlyargs, args.kw_defaults, strict=True)]:
+        properties[arg.arg] = _annotation_schema(arg.annotation)
+        if default is None:
+            required.append(arg.arg)
+    schema = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def _find_class(files: dict[str, bytes], module: str, name: str, depth: int = 0):
+    """Locate a class definition by name in a module, following one level of imports."""
+    path = module.replace(".", "/")
+    source = files.get(path + ".py") or files.get(path + "/__init__.py")
+    if source is None or depth > 2:
+        return None
+    try:
+        tree = ast.parse(source.decode("utf-8"))
+    except (SyntaxError, UnicodeDecodeError):
+        return None
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == name:
+            return node
+    package = module.rsplit(".", 1)[0] if "." in module and not path.endswith("__init__") else ""
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and any((alias.asname or alias.name) == name for alias in node.names):
+            original = next(alias.name for alias in node.names if (alias.asname or alias.name) == name)
+            target = node.module or ""
+            if node.level:
+                target = ".".join(part for part in (package, target) if part)
+            return _find_class(files, target, original, depth + 1)
+    return None
+
+
+def infer_class_methods(files: dict[str, bytes], module: str, object_name: str) -> tuple[tuple, bool]:
+    """Read the entrypoint object's query methods from source, without importing it.
+
+    Returns (class_methods, inferred). Falls back to query(message) when the object is not
+    a plain `name = SomeClass(...)` assignment or the class can't be found.
+    """
+    path = module.replace(".", "/")
+    source = files.get(path + ".py") or files.get(path + "/__init__.py")
+    try:
+        tree = ast.parse(source.decode("utf-8")) if source else None
+    except (SyntaxError, UnicodeDecodeError):
+        tree = None
+    class_name = None
+    for node in tree.body if tree else []:
+        if (isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == object_name
+                                                 for target in node.targets)
+                and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)):
+            class_name = node.value.func.id
+    found = _find_class(files, module, class_name) if class_name else None
+    if found is None:
+        return DEFAULT_METHODS, False
+    methods = []
+    for node in found.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in API_MODES:
+            methods.append({"name": node.name, "api_mode": API_MODES[node.name], "parameters": _method_schema(node)})
+    return (tuple(methods), True) if methods else (DEFAULT_METHODS, False)
 
 
 def export_uv_requirements(files: dict[str, bytes]) -> bytes:
@@ -214,6 +311,8 @@ def bundle_source(files: dict[str, bytes], module: str, requirements: str = "aut
         raise SourceError("Dependency file was not found. Select a requirements file or include pyproject.toml and uv.lock for auto detection.")
     if framework not in {"custom", "google-adk"}:
         raise SourceError("Unsupported agent framework")
+    class_methods, methods_inferred = (infer_class_methods(files, module, object_name)
+                                       if framework == "custom" else ((), False))
     if framework == "google-adk":
         wrapper_name = "_agent_platform_adk.py"
         if wrapper_name in files:
@@ -241,4 +340,4 @@ def bundle_source(files: dict[str, bytes], module: str, requirements: str = "aut
     return Bundle(payload, hashlib.sha256(payload).hexdigest(),
                   tuple({"path": name, "bytes": len(data)} for name, data in sorted(files.items())),
                   sum(map(len, files.values())), requirements, dependency_format,
-                  module, object_name, framework)
+                  module, object_name, framework, class_methods, methods_inferred)

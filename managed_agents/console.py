@@ -546,10 +546,11 @@ def deployment_body(config: ConsoleConfig, data: DeploymentInput, bundle: Bundle
                                "entrypointObject": bundle.entrypoint_object,
                                "requirementsFile": bundle.requirements},
             },
-            "classMethods": [{"name": "query", "api_mode": "", "parameters": {
-                "type": "object", "properties": {"message": {"type": "string"}},
-                "required": ["message"],
-            }}],
+            # Read from the agent's own source (see sources.infer_class_methods).
+            "classMethods": [dict(method) for method in bundle.class_methods] or [
+                {"name": "query", "api_mode": "", "parameters": {
+                    "type": "object", "properties": {"message": {"type": "string"}},
+                    "required": ["message"]}}],
             "deploymentSpec": {
                 "minInstances": 0, "maxInstances": 2,
                 "resourceLimits": {"cpu": "1", "memory": "1Gi"},
@@ -851,7 +852,11 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
                 "created_at": time.time(), "status": "planned", "operation": "", "resource": "",
                 "message": "Snapshot ready for approval", "sandbox": {"status": "not_run"},
                 "reviewed_by": request.state.user, "approved_by": "",
-                "warnings": source_warnings(files, data.framework), "status_check": "",
+                "warnings": source_warnings(files, data.framework) + ([] if bundle.methods_inferred or bundle.framework != "custom" else [
+                    (f"Couldn't read the query() signature of {data.module}.{data.object_name} from its source, "
+                     "so it is registered as query(message). Callers must send a 'message'.")]),
+                "class_methods": [dict(method) for method in bundle.class_methods],
+                "status_check": "",
                 "submitted_at": 0, "completed_at": 0, "logs_url": "",
                 "bundle": bundle, "input": data}
         with lock:

@@ -164,3 +164,12 @@ def test_real_gemini_client_accepts_the_tool_definitions():
     bound = model.bind_tools(definitions)
     declarations = bound.kwargs["tools"]
     assert declarations
+
+
+def test_accepts_other_input_field_names():
+    model = ScriptedModel([AIMessage(content="Hi!"), AIMessage(content="Hello again.")])
+    agent, _ = agent_with(model)
+    assert agent.query(input="hello")["reply"] == "Hi!"
+    assert agent.query(prompt="hello")["reply"] == "Hello again."
+    with pytest.raises(ValueError, match="non-empty"):
+        agent.query()
