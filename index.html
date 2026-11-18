@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="console-token" content="__CONSOLE_TOKEN__">
+  <meta name="color-scheme" content="light">
+  <title>Deployments | Agent Platform</title>
+  <link rel="icon" href="/static/cloud.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script defer src="/static/lucide.js"></script>
+  <script defer src="/static/app.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="Agent Platform home"><span class="brand-symbol"><i data-lucide="boxes"></i></span><span>Agent<span class="brand-light">Platform</span></span></a>
+    <div class="workspace-label">WORKSPACE</div>
+    <nav aria-label="Workspace">
+      <a class="nav-link active" href="#new-deployment"><i data-lucide="rocket"></i><span>Deploy agent</span><i class="nav-arrow" data-lucide="chevron-right"></i></a>
+      <a class="nav-link" href="#history"><i data-lucide="history"></i><span>Deployment history</span></a>
+      <button class="nav-link" id="environment-button" type="button"><i data-lucide="sliders-horizontal"></i><span>Environment</span></button>
+    </nav>
+    <div class="sidebar-footer"><span class="session-dot"></span><div>Operator console<small>Local session</small></div><i data-lucide="monitor"></i></div>
+  </aside>
+
+  <div class="workspace">
+    <header class="topbar"><div class="breadcrumb">Workspace <i data-lucide="chevron-right"></i><strong>Deployments</strong></div><div class="cloud-brand"><img src="/static/cloud.svg" alt="Google Cloud"><span>Google Cloud</span></div></header>
+    <main>
+      <div class="page-heading"><div><div class="eyebrow">AGENT OPERATIONS</div><h1>Deployments</h1></div><button id="new-button" class="button secondary" type="button"><i data-lucide="plus"></i>New deployment</button></div>
+      <section class="target-strip" aria-label="Deployment target">
+        <div><span class="strip-label">Runtime</span><strong><i data-lucide="cpu"></i>Agent Engine</strong></div>
+        <div class="project-strip"><span class="strip-label">Google Cloud project</span><strong id="target-project">Loading...</strong></div>
+        <div><span class="strip-label">Region</span><strong><i data-lucide="map-pin"></i><span id="target-region">Loading...</span></strong></div>
+        <div><span class="strip-label">Cloud submission</span><strong id="submission-state"><span class="status-dot warning"></span>Checking</strong></div>
+      </section>
+
+      <div id="notice" class="notice" role="alert" hidden></div>
+
+      <div class="deployment-layout" id="new-deployment">
+        <section class="form-section" aria-labelledby="form-title">
+          <div class="section-heading"><div class="section-icon"><i data-lucide="git-branch"></i></div><div><h2 id="form-title">New agent deployment</h2><span class="section-meta">Python 3.12 <span class="meta-dot"></span><span id="framework-label">Custom agent</span></span></div></div>
+          <form id="deployment-form">
+            <fieldset class="source-fieldset"><legend>Source</legend>
+              <div class="source-tabs" role="group" aria-label="Code source">
+                <label><input type="radio" name="source-kind" value="local" checked><span><i data-lucide="folder"></i>Local folder</span></label>
+                <label><input type="radio" name="source-kind" value="github"><span><i data-lucide="github"></i>GitHub</span></label>
+                <label><input type="radio" name="source-kind" value="zip"><span><i data-lucide="file-archive"></i>ZIP upload</span></label>
+              </div>
+            </fieldset>
+            <div id="local-fields" class="source-fields">
+              <label class="field">Folder path<input id="local-path" name="local-path" type="text" spellcheck="false" autocomplete="off" required placeholder="C:\projects\my-agent"></label>
+              <div class="root-line"><i data-lucide="folder-lock"></i><span>Allowed root</span><code id="allowed-root">Loading...</code></div>
+            </div>
+            <div id="github-fields" class="source-fields" hidden>
+              <label class="field">Public repository URL<input id="github-url" type="url" spellcheck="false" placeholder="https://github.com/organization/agent"></label>
+              <label class="field">Commit SHA<input id="github-sha" type="text" spellcheck="false" minlength="40" maxlength="40" pattern="[a-fA-F0-9]{40}" placeholder="40-character commit SHA"></label>
+            </div>
+            <div id="zip-fields" class="source-fields" hidden>
+              <label class="upload-zone" id="upload-zone" tabindex="0"><input id="zip-file" type="file" accept=".zip,application/zip" hidden><i data-lucide="upload-cloud"></i><strong id="upload-name">Choose ZIP archive</strong><span id="upload-size">8 MiB maximum</span></label>
+              <div class="upload-actions"><button id="clear-uploads" class="button secondary" type="button"><i data-lucide="trash-2"></i>Clear staged uploads</button></div>
+            </div>
+            <div class="form-divider"></div>
+            <label class="field">Agent framework<select id="framework"><option value="custom">Custom Python</option><option value="google-adk">Google ADK</option></select></label>
+            <div class="field-row"><label class="field">Agent name<input id="agent-name" type="text" required maxlength="80" pattern="[a-zA-Z0-9][a-zA-Z0-9 _.\-]*" placeholder="research-agent"></label><label class="field">Source subdirectory <span class="optional">Optional</span><input id="subdirectory" type="text" spellcheck="false" placeholder="agents/research"></label></div>
+            <div class="field-row"><label class="field">Entrypoint module<input id="entry-module" type="text" value="agent" required spellcheck="false" pattern="[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*"></label><label class="field">Entrypoint object<input id="entry-object" type="text" value="root_agent" required spellcheck="false" pattern="[a-zA-Z_][a-zA-Z0-9_]*"></label></div>
+            <label class="field">Dependency file<input id="requirements" type="text" value="auto" list="dependency-options" required spellcheck="false"><datalist id="dependency-options"><option value="auto">Auto detect</option><option value="requirements.txt">Requirements file</option><option value="pyproject.toml">uv project and lockfile</option><option value="uv.lock">uv lockfile and project</option></datalist></label>
+            <div class="runtime-details"><span><i data-lucide="shield-check"></i>Runtime identity</span><code id="runtime-account">Loading...</code></div>
+            <div class="form-actions"><span class="compact-note"><i data-lucide="package-check"></i>Snapshot review required</span><button class="button primary" type="submit" id="review-button"><i data-lucide="scan-line"></i><span>Review deployment</span></button></div>
+          </form>
+        </section>
+
+        <aside class="review-section" aria-labelledby="review-title">
+          <div class="review-heading"><h2 id="review-title">Deployment review</h2><span id="review-badge" class="badge neutral">No snapshot</span></div>
+          <div id="review-empty" class="review-empty"><span class="empty-package"><i data-lucide="package-open"></i></span><h3>No snapshot selected</h3><span class="empty-detail">Awaiting source review</span><div class="empty-specs"><span><i data-lucide="cpu"></i>1 vCPU / 1 GiB</span><span><i data-lucide="layers"></i>0-2 instances</span></div></div>
+          <div id="review-content" hidden>
+            <div class="snapshot-name"><i data-lucide="box"></i><h3 id="snapshot-name"></h3><button class="icon-button" id="download-plan" type="button" title="Download deployment plan" aria-label="Download deployment plan"><i data-lucide="download"></i></button></div>
+            <dl class="review-properties"><div><dt>Target</dt><dd>Vertex AI Agent Engine</dd></div><div><dt>Project</dt><dd id="review-project"></dd></div><div><dt>Entrypoint</dt><dd id="review-entrypoint"></dd></div><div><dt>Dependencies</dt><dd id="review-dependencies"></dd></div><div><dt>Source size</dt><dd id="review-size"></dd></div><div><dt>SHA-256</dt><dd class="digest-row"><code id="review-digest"></code><button class="icon-button" id="copy-digest" title="Copy source digest" aria-label="Copy source digest" type="button"><i data-lucide="copy"></i></button></dd></div></dl>
+            <details class="file-details"><summary id="files-summary">Source files</summary><ul id="file-list"></ul></details>
+            <div class="deployment-status" aria-live="polite"><div id="status-icon" class="status-icon"><i data-lucide="circle-check"></i></div><div><strong id="status-title">Ready for approval</strong><span id="status-message"></span></div></div>
+            <div id="operation-result" hidden><label class="result-label">Cloud operation</label><code id="operation-name"></code><a class="text-link" id="cloud-link" target="_blank" rel="noreferrer">Open Google Cloud<i data-lucide="external-link"></i></a></div>
+            <div id="approval-section"><label class="approval-label"><input id="approve-deployment" type="checkbox"><span>I approve this code and billable deployment.</span></label><label class="field">Confirm project ID<input id="confirm-project" type="text" spellcheck="false" autocomplete="off" placeholder="Project ID"></label></div>
+            <button id="deploy-button" class="button primary deploy-button" type="button" disabled><i data-lucide="rocket"></i><span>Deploy to GCP</span></button>
+            <div id="lock-state" class="lock-state"><i data-lucide="lock-keyhole"></i>Cloud submission locked</div>
+          </div>
+          <div class="review-footer"><i data-lucide="git-commit-horizontal"></i><span>Immutable source snapshot</span><span class="status-dot"></span></div>
+        </aside>
+      </div>
+
+      <section class="history-section" id="history" aria-labelledby="history-title"><div class="history-heading"><h2 id="history-title">Deployment history <span id="history-count">0</span></h2><button class="icon-button" type="button" id="refresh-history" title="Refresh deployment history" aria-label="Refresh deployment history"><i data-lucide="refresh-cw"></i></button></div><div class="table-scroll"><table><thead><tr><th>Agent</th><th>Source</th><th>Created</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="history-body"><tr><td colspan="5" class="empty-history"><i data-lucide="inbox"></i><strong>No deployments yet</strong></td></tr></tbody></table></div></section>
+      <footer class="page-footer"><span>Agent Platform <span class="footer-separator">/</span> Local deployment workspace</span><a href="https://cloud.google.com/vertex-ai/generative-ai/docs/agent-engine/overview" target="_blank" rel="noreferrer">Agent Engine documentation<i data-lucide="arrow-up-right"></i></a></footer>
+    </main>
+  </div>
+
+  <dialog id="environment-dialog"><div class="dialog-heading"><h2>Environment</h2><button class="icon-button" id="close-environment" type="button" aria-label="Close environment" title="Close"><i data-lucide="x"></i></button></div><dl id="environment-details" class="environment-details"></dl><button id="check-cloud" class="button secondary" type="button"><i data-lucide="list-checks"></i>Check GCP access</button><div id="preflight-result" class="preflight-result" aria-live="polite"></div><div class="dialog-footer"><span class="status-dot"></span>Loopback operator session</div></dialog>
+</body>
+</html>
