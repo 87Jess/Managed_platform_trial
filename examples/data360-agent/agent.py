@@ -256,8 +256,12 @@ class Data360Agent:
         """Agent Engine calls this once per container. Keep it cheap: work happens lazily."""
 
     # -- public method --------------------------------------------------------
-    def query(self, message: str, user_id: str = "", history: list[dict[str, str]] | None = None,
-              **_: Any) -> dict[str, Any]:
+    def query(self, message: str = "", user_id: str = "", history: list[dict[str, str]] | None = None,
+              **kwargs: Any) -> dict[str, Any]:
+        # Accept the field names other callers use (Agent Engine playground, LangChain-style input).
+        for alias in ("input", "prompt", "question", "text"):
+            if not message and isinstance(kwargs.get(alias), str):
+                message = kwargs[alias]
         if not isinstance(message, str) or not message.strip():
             raise ValueError("message must be a non-empty string")
         if len(message) > MAX_MESSAGE_LENGTH:

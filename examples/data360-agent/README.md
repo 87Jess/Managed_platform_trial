@@ -36,6 +36,7 @@ default service agent normally has it) and the runtime needs outbound HTTPS to
 ## Inputs
 
 * `query(message="What is the GDP of India?")` → `{"reply": ..., "tools_used": [...], "model": ...}`
+* `input=`, `prompt=` or `question=` work too, for callers that use those names.
 * Optional `history=[{"role": "user"|"assistant", "content": "..."}]` for multi-turn context.
 * JSON commands for debugging: `{"action": "list_tools"}` or
   `{"action": "call_tool", "name": "TOOL", "arguments": {...}}` sent as the message.
