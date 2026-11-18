@@ -222,6 +222,23 @@ class AgentEngineCloud:
             raise SourceError("Cloud returned an unexpected operation name")
         return match.group(1)
 
+    def list_agents(self, max_pages: int = 5):
+        """Agent Engine resources in the project and region (the console's Agent Platform runtimes)."""
+        url = (f"https://{self.config.region}-aiplatform.googleapis.com/v1/projects/"
+               f"{self.config.project}/locations/{self.config.region}/reasoningEngines")
+        agents, token = [], ""
+        with self.session() as client:
+            for _ in range(max_pages):
+                params = {"pageSize": 100, **({"pageToken": token} if token else {})}
+                response = client.get(url, params=params, timeout=30)
+                response.raise_for_status()
+                payload = response.json()
+                agents.extend(payload.get("reasoningEngines", []))
+                token = payload.get("nextPageToken", "")
+                if not token:
+                    break
+        return agents
+
     def status(self, name: str):
         pattern = (r"projects/[a-zA-Z0-9-]+/locations/" + re.escape(self.config.region)
                    + r"/(?:reasoningEngines/[a-zA-Z0-9_-]+/)?operations/[a-zA-Z0-9_-]+")
@@ -269,6 +286,36 @@ def source_warnings(files: dict[str, bytes], framework: str) -> list[str]:
         warnings.append("Google ADK deployments need google-cloud-aiplatform[agent_engines,adk] in the "
                         "dependencies; it was not found, so the deployment will likely fail to start.")
     return warnings
+
+
+def agent_summary(engine: dict) -> dict:
+    """The fields of a reasoningEngine resource that the Agent garden page shows."""
+    spec = engine.get("spec", {}) or {}
+    source = spec.get("sourceCodeSpec", {}) or {}
+    labels = engine.get("labels", {}) or {}
+    deployment = spec.get("deploymentSpec", {}) or {}
+    name = str(engine.get("name", ""))
+    return {
+        "name": name,
+        "id": name.rsplit("/", 1)[-1],
+        "display_name": engine.get("displayName", "") or name.rsplit("/", 1)[-1],
+        "description": engine.get("description", ""),
+        "create_time": engine.get("createTime", ""),
+        "update_time": engine.get("updateTime", ""),
+        "framework": spec.get("agentFramework", ""),
+        "methods": [method.get("name", "") for method in spec.get("classMethods", []) or []
+                    if isinstance(method, dict)],
+        "service_account": spec.get("serviceAccount", ""),
+        "deployment": ("source code" if source else "package" if spec.get("packageSpec")
+                       else "container" if spec.get("containerSpec") else "none"),
+        "entrypoint": ".".join(part for part in (
+            (source.get("pythonSpec", {}) or {}).get("entrypointModule", ""),
+            (source.get("pythonSpec", {}) or {}).get("entrypointObject", "")) if part),
+        "max_instances": deployment.get("maxInstances"),
+        "private_network": bool(deployment.get("pscInterfaceConfig")),
+        "managed_by_console": labels.get("managed-by") == "agent-platform-console",
+        "source_sha": labels.get("source-sha", ""),
+    }
 
 
 def github_files(location: str, revision: str):
@@ -458,6 +505,21 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
                 "deployment_enabled": config.allow_deploy and config.security_review_approved,
                 "sandbox_enabled": config.sandbox_enabled, "sandbox_engine": config.sandbox_engine,
                 "sandbox_required": config.require_sandbox_test}
+
+    @app.get("/api/agents")
+    def list_agents():
+        try:
+            engines = cloud.list_agents()
+        except GoogleAuthError:
+            raise HTTPException(502, "Google credentials are unavailable or expired; run "
+                                     "gcloud auth application-default login") from None
+        except HTTPError as error:
+            raise HTTPException(502, f"Could not list agents ({google_error(error)})") from None
+        except (RequestException, ValueError):
+            raise HTTPException(502, "Could not reach Google Cloud to list agents; retry") from None
+        agents = sorted((agent_summary(engine) for engine in engines if isinstance(engine, dict)),
+                        key=lambda agent: agent["create_time"], reverse=True)
+        return {"project": config.project, "region": config.region, "agents": agents}
 
     @app.get("/api/preflight")
     def preflight():

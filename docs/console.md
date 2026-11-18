@@ -99,6 +99,18 @@ The minimal example is [examples/source-agent/agent.py](../examples/source-agent
 Select the repository's `examples/source-agent` folder, keep module `agent` / object `root_agent`,
 and enter an agent name to review it. This example echoes the provided message; it makes no LLM calls.
 
+## Agent Garden
+
+The **Agent garden** page lists every agent on Agent Platform runtimes in the configured
+project and region, the same resources as
+`https://console.cloud.google.com/agent-platform/runtimes?project=PROJECT_ID`. It reads them live
+from the Vertex AI API (`reasoningEngines.list`), including agents deployed outside this console,
+and shows each agent's framework, creation time, identity, network, entrypoint and methods.
+Agents deployed by the console are marked. The list is read-only.
+
+The caller needs `aiplatform.reasoningEngines.list` (for example `roles/aiplatform.viewer`);
+the hosted console's service account already has `roles/aiplatform.user`.
+
 ## Quick PoC Deployment
 
 To demonstrate deployment before the platform's service account and private network exist,
@@ -113,8 +125,8 @@ uv run python -m managed_agents.console
 `default` runs the agent as the Agent Engine default service agent, which has Vertex AI access
 in the project; `none` omits the PSC interface, so the agent uses Agent Engine's standard
 networking. Neither matches the platform's security design: use this mode for demos only.
-The deployed agent appears in the Google Cloud console under Agent Engine
-(`https://console.cloud.google.com/vertex-ai/agents/agent-engines?project=PROJECT_ID`).
+The deployed agent appears in the Google Cloud console under Agent Platform runtimes
+(`https://console.cloud.google.com/agent-platform/runtimes?project=PROJECT_ID`).
 
 ## Test in a GCP Sandbox
 

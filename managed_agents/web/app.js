@@ -8,7 +8,7 @@ const sourceNames = { local: "Local folder", github: "GitHub", zip: "ZIP upload"
 const sourceIcons = { local: "folder", github: "github", zip: "file-archive" };
 const sandboxNames = { not_run: "GCP sandbox test not run", running: "Testing in GCP sandbox", passed: "Sandbox test passed", failed: "Sandbox test failed", error: "Sandbox test could not run" };
 
-function cloudConsoleUrl(project) { return `https://console.cloud.google.com/vertex-ai/agents/agent-engines?project=${encodeURIComponent(project)}`; }
+function cloudConsoleUrl(project) { return `https://console.cloud.google.com/agent-platform/runtimes?project=${encodeURIComponent(project)}`; }
 function duration(seconds) { const s = Math.max(0, Math.round(seconds)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`; }
 function alertBox(kind, text) {
   const box = document.createElement("div"); box.className = `alert ${kind}`;
@@ -147,6 +147,7 @@ function showPlan(plan, resetApproval = false) {
   for (const warning of plan.warnings || []) alerts.push(alertBox("warning", warning));
   byId("plan-alerts").replaceChildren(...alerts);
   const live = plan.status === "succeeded" && Boolean(plan.resource);
+  if (live && !garden.known?.has(plan.resource)) { garden.loaded = false; (garden.known ||= new Set()).add(plan.resource); }
   byId("success-panel").hidden = !live;
   if (live) {
     setText("resource-name", plan.resource);
@@ -183,7 +184,7 @@ function renderSandbox(sandbox) {
   byId("sandbox-section").hidden = state.plan?.status !== "planned" && sandbox.status === "not_run";
 }
 
-const viewTitles = { deploy: "Deploy agent", history: "Deployment history", environment: "Environment" };
+const viewTitles = { deploy: "Deploy agent", history: "Deployment history", agents: "Agent garden", environment: "Environment" };
 function showView() {
   const requested = location.hash.slice(1);
   const view = viewTitles[requested] ? requested : "deploy";
@@ -194,11 +195,79 @@ function showView() {
     if (active) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
   });
   setText("breadcrumb-current", viewTitles[view]);
+  if (view === "agents" && !garden.loaded && !garden.loading) loadGarden();
   document.title = `${viewTitles[view]} | Agent Platform`;
   if (requested && requested !== view) return;
   window.scrollTo({ top: 0 });
 }
 window.addEventListener("hashchange", showView);
+
+const garden = { agents: [], loaded: false, loading: false };
+const frameworkNames = { "google-adk": "Google ADK", custom: "Custom", langchain: "LangChain", langgraph: "LangGraph", ag2: "AG2", llama_index: "LlamaIndex" };
+function relativeTime(value) {
+  const time = Date.parse(value); if (!time) return "unknown";
+  const seconds = (Date.now() - time) / 1000;
+  if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))} min ago`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)} h ago`;
+  return new Date(time).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+function element(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
+
+function agentCard(agent) {
+  const card = element("article", "agent-card");
+  const head = element("div", "agent-head");
+  const title = element("div", "agent-title"); title.append(element("h3", "", agent.display_name), element("code", "", `ID ${agent.id}`));
+  head.append(icon("bot"), title);
+  const tags = element("div", "agent-tags");
+  tags.append(element("span", "badge planned", frameworkNames[agent.framework] || agent.framework || "Framework not set"));
+  if (agent.managed_by_console) tags.append(element("span", "badge succeeded", "Deployed by this console"));
+  if (agent.deployment === "none") tags.append(element("span", "badge neutral", "No code deployed"));
+  const facts = element("dl", "agent-facts");
+  const addFact = (label, value) => { const row = element("div"); row.append(element("dt", "", label), element("dd", "", value)); facts.append(row); };
+  addFact("Created", relativeTime(agent.create_time));
+  addFact("Updated", relativeTime(agent.update_time));
+  addFact("Runs as", agent.service_account || "Default service agent");
+  addFact("Network", agent.private_network ? "Private (PSC)" : "Public");
+  if (agent.entrypoint) addFact("Entrypoint", agent.entrypoint);
+  card.append(head, tags);
+  if (agent.description) card.append(element("p", "agent-description", agent.description));
+  card.append(facts);
+  if (agent.methods.length) { const methods = element("div", "agent-methods"); for (const method of agent.methods) methods.append(element("code", "", method)); card.append(methods); }
+  const actions = element("div", "agent-actions");
+  const copy = element("button", "button secondary"); copy.type = "button"; copy.append(icon("copy"), document.createTextNode("Copy resource name"));
+  copy.addEventListener("click", () => copyText(agent.name, copy));
+  const open = element("a", "button secondary"); open.href = cloudConsoleUrl(state.config?.project || ""); open.target = "_blank"; open.rel = "noreferrer"; open.append(icon("external-link"), document.createTextNode("Google Cloud"));
+  actions.append(copy, open); card.append(actions);
+  return card;
+}
+
+function renderGarden() {
+  const query = byId("garden-filter").value.trim().toLowerCase();
+  const shown = garden.agents.filter((agent) => !query || [agent.display_name, agent.id, agent.framework, agent.description].some((value) => (value || "").toLowerCase().includes(query)));
+  setText("garden-count", garden.loaded ? `${shown.length} of ${garden.agents.length} agent${garden.agents.length === 1 ? "" : "s"}` : "");
+  if (garden.loaded && !garden.agents.length) {
+    const empty = element("div", "garden-empty"); empty.append(icon("sprout"), element("strong", "", "No agents in this project and region yet"), element("span", "", "Deploy one from the Deploy agent page and it will appear here."));
+    byId("garden-grid").replaceChildren(empty);
+  } else byId("garden-grid").replaceChildren(...shown.map(agentCard));
+  icons();
+}
+
+async function loadGarden() {
+  garden.loading = true;
+  const button = byId("garden-refresh"); button.disabled = true;
+  byId("garden-status").replaceChildren(alertBox("info", "Loading agents from Google Cloud..."));
+  icons();
+  try {
+    const data = await api("/api/agents");
+    garden.agents = data.agents; garden.loaded = true;
+    setText("garden-scope", `${data.project} / ${data.region}`);
+    byId("garden-status").replaceChildren();
+  } catch (error) {
+    byId("garden-status").replaceChildren(alertBox("error", error.message));
+  } finally { garden.loading = false; button.disabled = false; renderGarden(); }
+}
+byId("garden-refresh").addEventListener("click", loadGarden);
+byId("garden-filter").addEventListener("input", renderGarden);
 
 function renderHistory() {
   setText("history-count", String(state.plans.length));
@@ -361,6 +430,7 @@ async function initialize() {
     setText("summary-project", config.project); setText("summary-region", config.region);
     byId("summary-submission").replaceChildren(Object.assign(document.createElement("span"), { className: `status-dot${config.deployment_enabled ? "" : " warning"}` }), document.createTextNode(config.deployment_enabled ? "Cloud submission enabled" : "Cloud submission locked"));
     byId("history-cloud-link").href = cloudConsoleUrl(config.project);
+    byId("runtimes-link").href = cloudConsoleUrl(config.project);
     setText("target-identity", config.runtime_account || "Agent Engine default service agent");
     setText("target-network", config.network_attachment ? `PSC: ${config.network_attachment.split("/").pop()}` : "Public (no PSC attachment)"); setText("allowed-root", config.source_root); setText("runtime-account", config.runtime_account || "Agent Engine default service agent");
     byId("local-path").placeholder = config.source_root;

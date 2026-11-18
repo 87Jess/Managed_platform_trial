@@ -594,3 +594,64 @@ def test_plan_warns_about_framework_and_missing_adk_dependency(console):
         plan = client.post("/api/plans", json={"source_kind": "zip", "location": upload_id,
                                                "display_name": "Weather", "framework": framework}).json()
         assert any(expected in warning for warning in plan["warnings"]), plan["warnings"]
+
+
+ENGINE = {
+    "name": "projects/123/locations/us-central1/reasoningEngines/42",
+    "displayName": "weather-agent", "description": "Answers weather questions",
+    "createTime": "2026-11-18T10:00:00Z", "updateTime": "2026-11-18T10:05:00Z",
+    "labels": {"managed-by": "agent-platform-console", "source-sha": "abc"},
+    "spec": {"agentFramework": "google-adk",
+             "classMethods": [{"name": "async_create_session"}, {"name": "async_stream_query"}],
+             "sourceCodeSpec": {"pythonSpec": {"entrypointModule": "_agent_platform_adk",
+                                               "entrypointObject": "root_agent"}},
+             "deploymentSpec": {"maxInstances": 2}},
+}
+
+
+def test_agent_garden_lists_project_agents(console, monkeypatch):
+    client, cloud, _ = console
+    older = {"name": "projects/123/locations/us-central1/reasoningEngines/7",
+             "createTime": "2026-01-01T00:00:00Z"}
+    monkeypatch.setattr(cloud, "list_agents", lambda: [older, ENGINE], raising=False)
+    data = client.get("/api/agents").json()
+    assert data["project"] == "example-project"
+    first, second = data["agents"]
+    assert first["id"] == "42"
+    assert first["display_name"] == "weather-agent"
+    assert first["framework"] == "google-adk"
+    assert first["methods"] == ["async_create_session", "async_stream_query"]
+    assert first["managed_by_console"] is True
+    assert first["service_account"] == ""
+    assert first["entrypoint"] == "_agent_platform_adk.root_agent"
+    assert second["display_name"] == "7"
+    assert second["deployment"] == "none"
+    assert not cloud.submissions
+
+
+def test_agent_garden_reports_google_errors(console, monkeypatch):
+    client, cloud, _ = console
+    def denied():
+        raise google_http_error(403, "PERMISSION_DENIED", "aiplatform.reasoningEngines.list denied")
+    monkeypatch.setattr(cloud, "list_agents", denied, raising=False)
+    response = client.get("/api/agents")
+    assert response.status_code == 502
+    assert "PERMISSION_DENIED" in response.json()["detail"]
+    del client.headers["X-Console-Token"]
+    assert client.get("/api/agents").status_code == 403
+
+
+def test_list_agents_pages_through_results(tmp_path):
+    session = MagicMock()
+    session.__enter__.return_value = session
+    first, second = MagicMock(), MagicMock()
+    first.json.return_value = {"reasoningEngines": [{"name": "a"}], "nextPageToken": "next"}
+    second.json.return_value = {"reasoningEngines": [{"name": "b"}]}
+    session.get.side_effect = [first, second]
+    cloud = AgentEngineCloud(ConsoleConfig(source_root=tmp_path, project="example-project"))
+    cloud.session = lambda: session
+    assert [agent["name"] for agent in cloud.list_agents()] == ["a", "b"]
+    url = session.get.call_args_list[0].args[0]
+    assert url == ("https://us-central1-aiplatform.googleapis.com/v1/projects/example-project/"
+                   "locations/us-central1/reasoningEngines")
+    assert session.get.call_args_list[1].kwargs["params"]["pageToken"] == "next"

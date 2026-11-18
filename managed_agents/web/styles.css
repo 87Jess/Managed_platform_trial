@@ -125,3 +125,34 @@ td.resource-cell{color:#5f6368}
 .nav-link{white-space:nowrap}
 .nav-link .nav-arrow{display:none}
 .nav-link.active .nav-arrow{display:block}
+
+/* ---- Agent garden ---- */
+.garden-toolbar{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.search-field{flex:1;min-width:220px;max-width:460px;display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #dadce0;border-radius:4px;padding:0 12px;height:38px;color:#5f6368}
+.search-field:focus-within{border-color:#1a73e8;box-shadow:0 0 0 2px #1a73e81f}
+.search-field svg{width:16px;height:16px}
+.search-field input{border:0;outline:0;flex:1;min-width:0;font-size:13px;color:#202124;background:transparent}
+.garden-count{font-size:12px;color:#5f6368;margin-right:auto}
+.garden-status:not(:empty){margin-bottom:14px}
+.garden-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-bottom:8px}
+.agent-card{background:#fff;border:1px solid #dadce0;border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.agent-card:hover{box-shadow:0 1px 3px #3c40434d}
+.agent-head{display:flex;gap:10px;align-items:flex-start}
+.agent-head>svg{width:22px;height:22px;color:#1a73e8;margin-top:1px}
+.agent-title{min-width:0}
+.agent-title h3{font-size:14px;font-weight:500;color:#202124;overflow-wrap:anywhere}
+.agent-title code{font-size:11px;color:#5f6368}
+.agent-tags{display:flex;flex-wrap:wrap;gap:6px}
+.agent-description{font-size:12px;color:#3c4043;margin:0}
+.agent-facts{margin:0;font-size:12px;border-top:1px solid #e8eaed;padding-top:8px}
+.agent-facts>div{display:grid;grid-template-columns:86px minmax(0,1fr);gap:8px;padding:3px 0}
+.agent-facts dt{color:#5f6368}
+.agent-facts dd{margin:0;color:#202124;overflow-wrap:anywhere}
+.agent-methods{display:flex;flex-wrap:wrap;gap:5px}
+.agent-methods code{font-size:10px;background:#f1f3f4;color:#3c4043;border-radius:3px;padding:2px 6px}
+.agent-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto;padding-top:4px}
+.agent-actions .button{min-height:32px;padding:6px 10px;font-size:12px}
+.garden-empty{grid-column:1/-1;background:#fff;border:1px dashed #dadce0;border-radius:8px;padding:36px;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;color:#5f6368;font-size:12px}
+.garden-empty svg{width:28px;height:28px;color:#1a73e8}
+.garden-empty strong{color:#202124;font-size:14px;font-weight:500}
+@media(max-width:600px){.sidebar nav{display:grid;grid-template-columns:1fr 1fr;gap:5px}.nav-link{justify-content:flex-start;padding:9px 10px}.nav-link .nav-arrow,.nav-link.active .nav-arrow{display:none}.search-field{min-width:0;max-width:none;flex-basis:100%}.garden-grid{grid-template-columns:1fr}}

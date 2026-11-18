@@ -18,6 +18,7 @@
     <nav aria-label="Workspace">
       <a class="nav-link active" href="#deploy" data-view="deploy"><i data-lucide="rocket"></i><span>Deploy agent</span><i class="nav-arrow" data-lucide="chevron-right"></i></a>
       <a class="nav-link" href="#history" data-view="history"><i data-lucide="history"></i><span>Deployment history</span><i class="nav-arrow" data-lucide="chevron-right"></i></a>
+      <a class="nav-link" href="#agents" data-view="agents"><i data-lucide="sprout"></i><span>Agent garden</span><i class="nav-arrow" data-lucide="chevron-right"></i></a>
       <a class="nav-link" href="#environment" data-view="environment"><i data-lucide="sliders-horizontal"></i><span>Environment</span><i class="nav-arrow" data-lucide="chevron-right"></i></a>
     </nav>
     <div class="sidebar-footer"><span class="session-dot"></span><div>Operator console<small>Local session</small></div><i data-lucide="monitor"></i></div>
@@ -80,7 +81,7 @@
               <div class="success-head"><i data-lucide="circle-check-big"></i><div><strong>Agent is live on Agent Engine</strong><span id="success-meta"></span></div></div>
               <label class="result-label">Resource name</label>
               <div class="copy-row"><code id="resource-name"></code><button class="icon-button" id="copy-resource" type="button" title="Copy resource name" aria-label="Copy resource name"><i data-lucide="copy"></i></button></div>
-              <a class="button primary open-cloud" id="open-cloud" target="_blank" rel="noreferrer"><i data-lucide="external-link"></i><span>Open in Google Cloud console</span></a>
+              <a class="button primary open-cloud" id="open-cloud" target="_blank" rel="noreferrer"><i data-lucide="external-link"></i><span>Open Agent Platform runtimes</span></a>
               <details class="file-details" open><summary>Query it from Python</summary><div class="copy-row snippet-row"><pre id="query-snippet" class="snippet"></pre><button class="icon-button" id="copy-snippet" type="button" title="Copy snippet" aria-label="Copy snippet"><i data-lucide="copy"></i></button></div></details>
             </div>
             <dl class="review-properties"><div><dt>Target</dt><dd>Vertex AI Agent Engine</dd></div><div><dt>Project</dt><dd id="review-project"></dd></div><div><dt>Entrypoint</dt><dd id="review-entrypoint"></dd></div><div><dt>Dependencies</dt><dd id="review-dependencies"></dd></div><div><dt>Source size</dt><dd id="review-size"></dd></div><div><dt>SHA-256</dt><dd class="digest-row"><code id="review-digest"></code><button class="icon-button" id="copy-digest" title="Copy source digest" aria-label="Copy source digest" type="button"><i data-lucide="copy"></i></button></dd></div></dl>
@@ -91,7 +92,7 @@
               <button id="sandbox-button" class="button secondary" type="button" disabled><i data-lucide="flask-conical"></i><span>Test in GCP sandbox</span></button>
             </div>
             <div class="deployment-status" aria-live="polite"><div id="status-icon" class="status-icon"><i data-lucide="circle-check"></i></div><div><strong id="status-title">Ready for approval</strong><span id="status-message"></span></div></div>
-            <div id="operation-result" hidden><label class="result-label">Cloud operation</label><code id="operation-name"></code><a class="text-link" id="cloud-link" target="_blank" rel="noreferrer">Open Google Cloud<i data-lucide="external-link"></i></a></div>
+            <div id="operation-result" hidden><label class="result-label">Cloud operation</label><code id="operation-name"></code><a class="text-link" id="cloud-link" target="_blank" rel="noreferrer">Open Agent Platform runtimes<i data-lucide="external-link"></i></a></div>
             <div id="approval-section"><label class="approval-label"><input id="approve-deployment" type="checkbox"><span>I approve this code and billable deployment.</span></label><label class="field">Confirm project ID<input id="confirm-project" type="text" spellcheck="false" autocomplete="off" placeholder="Project ID"></label></div>
             <button id="deploy-button" class="button primary deploy-button" type="button" disabled><i data-lucide="rocket"></i><span>Deploy to GCP</span></button>
             <div id="lock-state" class="lock-state"><i data-lucide="lock-keyhole"></i>Cloud submission locked</div>
@@ -110,7 +111,17 @@
         <div class="stat"><span class="strip-label">Failed or unconfirmed</span><strong id="stat-failed" class="bad">0</strong></div>
       </div>
       <section class="history-section card" aria-labelledby="history-title"><div class="history-heading"><h2 id="history-title">Deployment history <span id="history-count">0</span></h2><button class="icon-button" type="button" id="refresh-history" title="Refresh deployment history" aria-label="Refresh deployment history"><i data-lucide="refresh-cw"></i></button></div><div class="table-scroll"><table><thead><tr><th>Agent</th><th>Source</th><th>Created</th><th>Status</th><th>Google Cloud</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="history-body"><tr><td colspan="6" class="empty-history"><i data-lucide="inbox"></i><strong>No deployments yet</strong></td></tr></tbody></table></div></section>
-      <p class="view-note"><i data-lucide="info"></i>History is kept in memory for this console session. Deployed agents remain in Google Cloud: <a class="text-link inline" id="history-cloud-link" target="_blank" rel="noreferrer">open Agent Engine in the Google Cloud console<i data-lucide="external-link"></i></a></p>
+      <p class="view-note"><i data-lucide="info"></i>History is kept in memory for this console session. Deployed agents remain in Google Cloud: <a class="text-link inline" id="history-cloud-link" target="_blank" rel="noreferrer">open Agent Platform runtimes in the Google Cloud console<i data-lucide="external-link"></i></a></p>
+      </section>
+      <section class="view" id="view-agents" data-view="agents" hidden>
+      <div class="page-heading"><div><div class="eyebrow">AGENT PLATFORM RUNTIMES</div><h1>Agent garden</h1><p class="page-lede">Agents running on Agent Platform in <span id="garden-scope">this project</span>, read live from Google Cloud. Includes agents deployed outside this console.</p></div><a class="button secondary" id="runtimes-link" target="_blank" rel="noreferrer"><i data-lucide="external-link"></i>Open in Google Cloud</a></div>
+      <div class="garden-toolbar">
+        <label class="search-field"><i data-lucide="search"></i><span class="sr-only">Filter agents</span><input id="garden-filter" type="search" placeholder="Filter by name, ID or framework" autocomplete="off"></label>
+        <span id="garden-count" class="garden-count"></span>
+        <button class="button secondary" id="garden-refresh" type="button"><i data-lucide="refresh-cw"></i><span>Refresh</span></button>
+      </div>
+      <div id="garden-status" class="garden-status" aria-live="polite"></div>
+      <div id="garden-grid" class="garden-grid"></div>
       </section>
       <section class="view" id="view-environment" data-view="environment" hidden>
       <div class="page-heading"><div><div class="eyebrow">CONFIGURATION</div><h1>Environment</h1><p class="page-lede">The Google Cloud target, runtime identity and safety gates this console deploys with. Settings are read when the console starts.</p></div></div>
