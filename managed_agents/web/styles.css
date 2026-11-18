@@ -201,3 +201,18 @@ dialog.drawer[open]{display:flex}
 .drawer-actions{display:flex;justify-content:space-between;gap:8px}
 #success-panel .open-cloud+.open-cloud{margin-top:0}
 dialog.drawer{max-width:100vw}
+
+/* ---- Deploy page: form and review as two cards ---- */
+.deployment-layout{background:transparent;border:0;gap:20px;align-items:start;grid-template-columns:minmax(0,1.45fr) minmax(340px,1fr)}
+.deployment-layout>.form-section,.deployment-layout>.review-section{background:#fff;border:1px solid #dadce0;border-radius:8px;padding:24px}
+.review-section{border-left:1px solid #dadce0;position:sticky;top:20px;max-height:calc(100vh - 40px);overflow:auto}
+.review-empty{min-height:0;padding:40px 0 24px;flex:0}
+.review-footer{margin-top:16px;padding-bottom:0}
+.form-actions{margin-top:22px}
+.runtime-details{border:1px solid #e8eaed;background:#f8f9fa;border-radius:6px}
+.section-icon{background:#e8f0fe;border-color:#d2e3fc;color:#1967d2;border-radius:8px}
+.notice:not([hidden]){margin-bottom:16px}
+@media(min-width:1500px){.deployment-layout{grid-template-columns:minmax(0,1.5fr) minmax(380px,1fr)}.form-section,.review-section{padding:28px}}
+@media(max-width:1100px){.deployment-layout{grid-template-columns:minmax(0,1fr) minmax(300px,.95fr);gap:16px}.deployment-layout>.form-section,.deployment-layout>.review-section{padding:20px}}
+@media(max-width:850px){.deployment-layout{grid-template-columns:1fr}.review-section{position:static;max-height:none;border-top:1px solid #dadce0}}
+@media(max-width:600px){.deployment-layout>.form-section,.deployment-layout>.review-section{padding:16px}}
