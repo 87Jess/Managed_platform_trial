@@ -1,0 +1,21 @@
+steps:
+  - id: tests
+    name: python:3.12-slim
+    entrypoint: sh
+    args:
+      - -c
+      - pip install uv==0.13.4 && uv sync --frozen && uv run python -m pytest -q && uv run python -m ruff check .
+  - id: policy-image
+    name: gcr.io/cloud-builders/docker
+    args: [build, -t, '${_REGION}-docker.pkg.dev/$PROJECT_ID/managed-agents/policy:$BUILD_ID', .]
+  - id: kong-image
+    name: gcr.io/cloud-builders/docker
+    args: [build, -f, gateway/Dockerfile, -t, '${_REGION}-docker.pkg.dev/$PROJECT_ID/managed-agents/kong:$BUILD_ID', .]
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/managed-agents/policy:$BUILD_ID'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/managed-agents/kong:$BUILD_ID'
+serviceAccount: projects/$PROJECT_ID/serviceAccounts/platform-build@$PROJECT_ID.iam.gserviceaccount.com
+substitutions:
+  _REGION: us-central1
+options:
+  logging: CLOUD_LOGGING_ONLY

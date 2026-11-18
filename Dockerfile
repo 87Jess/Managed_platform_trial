@@ -1,11 +1,14 @@
-FROM kong:3.9.1
-COPY gateway/kong.yml /etc/kong/kong.yml
-ENV KONG_DATABASE=off \
-    KONG_DECLARATIVE_CONFIG=/etc/kong/kong.yml \
-    KONG_PROXY_LISTEN=0.0.0.0:8080 \
-    KONG_ADMIN_LISTEN=off \
-    KONG_STATUS_LISTEN=off \
-    KONG_PROXY_ACCESS_LOG=off \
-    KONG_PROXY_ERROR_LOG=/dev/stderr \
-    KONG_LOG_LEVEL=warn
-EXPOSE 8080
+FROM ghcr.io/astral-sh/uv:0.13.4 AS uv
+FROM python:3.12-slim
+COPY --from=uv /uv /usr/local/bin/uv
+WORKDIR /app
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy HOST=0.0.0.0 PORT=8081
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project --no-default-groups
+COPY managed_agents ./managed_agents
+COPY registry/agents.json ./registry/agents.json
+COPY main.py .
+RUN useradd --uid 10001 --create-home app
+USER 10001
+EXPOSE 8081
+CMD ["/app/.venv/bin/python", "main.py"]
