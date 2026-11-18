@@ -838,3 +838,25 @@ def test_agent_list_is_cached_until_refresh_or_deploy(console, monkeypatch):
     assert client.get(f"/api/plans/{plan['id']}").json()["status"] == "succeeded"
     assert client.get("/api/agents").json()["cached"] is False
     assert len(calls) == 3
+
+
+def test_agent_summary_exposes_method_schemas():
+    from managed_agents.console import agent_summary
+
+    schema = {"type": "object", "properties": {"action": {"type": "string", "enum": ["list_tools", "call_tool"]}},
+              "required": ["action"]}
+    summary = agent_summary({"name": AGENT, "spec": {"classMethods": [
+        {"name": "query", "api_mode": "", "parameters": schema}, {"name": "health"}, "not-a-dict"]}})
+    assert summary["methods"] == ["query", "health"]
+    assert summary["method_schemas"] == {"query": schema, "health": {}}
+
+
+def test_agent_errors_keep_the_agents_explanation(console, monkeypatch):
+    client, cloud, _ = console
+    explanation = 'Send JSON: {"action":"list_tools"} or {"action":"call_tool","name":"TOOL","arguments":{}}'
+    def rejects(*args):
+        raise google_http_error(400, "INVALID_ARGUMENT", "Reasoning Engine Execution failed. " + "x" * 500 + explanation)
+    monkeypatch.setattr(cloud, "invoke_agent", rejects, raising=False)
+    detail = client.post("/api/agents/test", json={"name": AGENT, "method": "query",
+                                                   "input": {"message": "hi"}}).json()["detail"]
+    assert explanation in detail

@@ -484,6 +484,38 @@ function testDefaults(agent) {
   if (methods.includes("stream_query")) return { method: "stream_query", mode: "stream", input: { [textKey]: "{message}" } };
   return { method: methods[0] || "query", mode: "query", input: { message: "{message}" } };
 }
+const textKeys = ["message", "input", "query", "prompt", "text", "question"];
+// Build the method's input from the JSON schema the agent published for it.
+function inputFromSchema(schema) {
+  const props = schema?.properties || {};
+  const keys = Object.keys(props);
+  if (!keys.length) return null;
+  const required = schema.required || [];
+  const textKey = textKeys.find((key) => key in props)
+    || required.find((key) => props[key]?.type === "string" && key !== "user_id")
+    || keys.find((key) => props[key]?.type === "string" && key !== "user_id");
+  const input = {};
+  for (const key of keys) {
+    const type = props[key]?.type;
+    if (key === "user_id") input[key] = tester.userId;
+    else if (key === textKey) input[key] = "{message}";
+    else if (required.includes(key)) input[key] = props[key]?.enum?.[0] ?? (type === "number" || type === "integer" ? 0 : type === "boolean" ? false : type === "array" ? [] : type === "object" ? {} : "");
+  }
+  return { input, textKey, enumValues: textKey && props[textKey]?.enum ? props[textKey].enum : null };
+}
+function applyMethod(method) {
+  const agent = tester.agent;
+  const schema = agent.method_schemas?.[method];
+  const built = inputFromSchema(schema);
+  const fallback = testDefaults(agent);
+  byId("test-input").value = JSON.stringify(built ? built.input : fallback.input, null, 2);
+  byId("test-schema").textContent = schema && Object.keys(schema).length ? JSON.stringify(schema, null, 2) : "This agent didn't publish a schema for this method.";
+  const natural = !built || textKeys.includes(built.textKey);
+  setSuggestions(built?.enumValues?.slice(0, 4) || (natural ? ["Hi! What can you do?", "Show me an example of what you're good at"] : []));
+  byId("test-message").placeholder = natural ? "Message the agent…" : `Value for "${built.textKey}"…`;
+  testInfo();
+}
+
 function fillMessage(value, message) {
   if (typeof value === "string") return value.replaceAll("{message}", message);
   if (Array.isArray(value)) return value.map((item) => fillMessage(item, message));
@@ -516,11 +548,10 @@ function openTester(agent) {
   const methods = agent.methods?.length ? agent.methods : [defaults.method];
   byId("test-method").replaceChildren(...methods.map((name) => Object.assign(document.createElement("option"), { value: name, textContent: name })));
   byId("test-method").value = defaults.method; byId("test-mode").value = defaults.mode;
-  byId("test-input").value = JSON.stringify(defaults.input, null, 2);
+  byId("test-form").querySelector(".advanced").open = false;
   byId("test-transcript").replaceChildren();
   bubble("system", "You're talking to the deployed agent in Google Cloud. It may call models and tools, and the first reply can take a moment while it warms up.");
-  setSuggestions(["Hi! What can you do?", "Show me an example of what you're good at"]);
-  testInfo();
+  applyMethod(defaults.method);
   byId("test-drawer").showModal(); icons();
   byId("test-message").focus();
 }
@@ -722,13 +753,19 @@ byId("test-form").addEventListener("submit", async (event) => {
     const footer = el("div", "footer"); const raw = el("details", "raw");
     raw.append(el("summary", "", `${((performance.now() - started) / 1000).toFixed(1)}s${data.event_count ? ` · ${data.event_count} events` : ""} · raw response`), el("pre", "", JSON.stringify(data.events || data.output, null, 2)));
     footer.append(raw); reply.append(footer); icons();
-  } catch (error) { typing.remove(); bubble("error", error.message); }
+  } catch (error) {
+    typing.remove(); bubble("error", error.message);
+    if (/Send JSON|INVALID_ARGUMENT|missing|required|unexpected keyword|argument/i.test(error.message)) {
+      byId("test-form").querySelector(".advanced").open = true;
+      bubble("system", "The agent didn't accept that input. Its expected input is under “Method & input”: adjust the JSON (your text replaces {message}) and send again.");
+    }
+  }
   finally { tester.busy = false; byId("test-send").disabled = false; byId("test-transcript").scrollTop = byId("test-transcript").scrollHeight; byId("test-message").focus(); }
 });
 byId("test-message").addEventListener("input", autosize);
 byId("test-message").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); byId("test-form").requestSubmit(); } });
 byId("test-new-session").addEventListener("click", () => { if (!tester.agent) return; tester.session = ""; byId("test-transcript").replaceChildren(); bubble("system", "Fresh conversation. The agent won't remember the last one."); testInfo(); });
-byId("test-method").addEventListener("change", testInfo);
+byId("test-method").addEventListener("change", () => applyMethod(byId("test-method").value));
 byId("test-mode").addEventListener("change", testInfo);
 byId("test-close").addEventListener("click", () => byId("test-drawer").close());
 byId("test-drawer").addEventListener("click", (event) => { if (event.target === byId("test-drawer")) byId("test-drawer").close(); });

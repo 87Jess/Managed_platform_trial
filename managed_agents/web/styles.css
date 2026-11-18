@@ -425,3 +425,7 @@ dialog.drawer[open]{display:flex;animation:drawer-in 250ms var(--ease-out) both}
   .kv.wide{grid-template-columns:1fr}
   .stats{gap:24px}
 }
+
+.schema{margin-top:10px}
+.schema>summary{cursor:pointer;color:var(--ink-3);font-weight:600}
+.schema .terminal.light{margin:8px 0 0;max-height:200px}

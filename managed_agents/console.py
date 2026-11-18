@@ -365,7 +365,7 @@ class AgentEngineCloud:
             return response.json()
 
 
-def google_error(error: HTTPError) -> str:
+def google_error(error: HTTPError, limit: int = 400) -> str:
     """Short, operator-facing summary of a Google API error: HTTP code, status and message."""
     response = error.response
     if response is None:
@@ -376,7 +376,7 @@ def google_error(error: HTTPError) -> str:
         detail = ": ".join(part for part in (body.get("status", ""), body.get("message", "")) if part)
     except (ValueError, AttributeError):
         pass
-    return f"HTTP {response.status_code}" + (f": {detail[:400]}" if detail else "")
+    return f"HTTP {response.status_code}" + (f": {detail[:limit]}" if detail else "")
 
 
 def find_logs_url(value) -> str:
@@ -494,6 +494,10 @@ def agent_summary(engine: dict) -> dict:
         "framework": spec.get("agentFramework", ""),
         "methods": [method.get("name", "") for method in spec.get("classMethods", []) or []
                     if isinstance(method, dict)],
+        # The JSON schema each class method accepts, so the console can build the right input.
+        "method_schemas": {method.get("name", ""): method.get("parameters") or {}
+                           for method in spec.get("classMethods", []) or []
+                           if isinstance(method, dict) and method.get("name")},
         "service_account": spec.get("serviceAccount", ""),
         "deployment": ("source code" if source else "package" if spec.get("packageSpec")
                        else "container" if spec.get("containerSpec") else "none"),
@@ -733,7 +737,8 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
         except GoogleAuthError:
             raise HTTPException(502, "Google credentials are unavailable or expired") from None
         except HTTPError as error:
-            raise HTTPException(502, f"The agent call failed ({google_error(error)})") from None
+            # Agents explain bad input in their error text, so keep enough of it to be useful.
+            raise HTTPException(502, f"The agent call failed ({google_error(error, limit=2000)})") from None
         except (RequestException, ValueError):
             raise HTTPException(502, "Could not reach the agent; it may still be starting. Retry.") from None
         if data.mode == "stream":
