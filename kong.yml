@@ -1,0 +1,30 @@
+_format_version: "3.0"
+_transform: true
+services:
+  - name: platform-policy
+    url: http://127.0.0.1:8081
+    connect_timeout: 5000
+    read_timeout: 125000
+    write_timeout: 10000
+    retries: 0
+    routes:
+      - name: platform-api
+        paths:
+          - /v1
+          - /healthz
+          - /readyz
+        strip_path: false
+        protocols:
+          - http
+          - https
+plugins:
+  - name: request-size-limiting
+    config:
+      allowed_payload_size: 1
+      size_unit: megabytes
+  - name: rate-limiting
+    config:
+      minute: 120
+      policy: local
+      limit_by: ip
+      hide_client_headers: true
