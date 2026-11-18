@@ -620,6 +620,11 @@ def main():
         return
     print(f"Agent Platform console: open http://127.0.0.1:{config.port} in your browser "
           "(Ctrl+C to stop)", flush=True)
+    print(f"  Cloud submission: {'ENABLED' if config.allow_deploy and config.security_review_approved else 'LOCKED'}"
+          f" (CONSOLE_ALLOW_DEPLOY={int(config.allow_deploy)},"
+          f" CONSOLE_SECURITY_REVIEW_APPROVED={int(config.security_review_approved)})", flush=True)
+    print(f"  Runtime account: {config.account or 'Agent Engine default service agent'}", flush=True)
+    print(f"  Network attachment: {config.attachment or 'none'}", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=config.port, access_log=False)
 
 
