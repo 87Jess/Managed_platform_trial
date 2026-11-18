@@ -140,6 +140,13 @@ class Approval(StrictModel):
     approve_code: bool
 
 
+AGENT_LIST_FIELDS = (
+    "nextPageToken,reasoningEngines(name,displayName,description,createTime,updateTime,labels,"
+    "spec(agentFramework,classMethods,serviceAccount,deploymentSpec(maxInstances,pscInterfaceConfig),"
+    "sourceCodeSpec(pythonSpec),packageSpec(pythonVersion),containerSpec(imageUri)))"
+)
+
+
 class _ReusedSession:
     """Context manager that hands out a pooled session without closing it on exit."""
 
@@ -325,11 +332,19 @@ class AgentEngineCloud:
         """Agent Engine resources in the project and region (the console's Agent Platform runtimes)."""
         url = (f"https://{self.config.region}-aiplatform.googleapis.com/v1/projects/"
                f"{self.config.project}/locations/{self.config.region}/reasoningEngines")
-        agents, token = [], ""
+        agents, token, fields = [], "", AGENT_LIST_FIELDS
         with self.session() as client:
             for _ in range(max_pages):
                 params = {"pageSize": 100, **({"pageToken": token} if token else {})}
+                if fields:
+                    # Partial response: skip each agent's stored source archive, which can be
+                    # megabytes per agent and made the list slow.
+                    params["fields"] = fields
                 response = client.get(url, params=params, timeout=30)
+                if fields and response.status_code == 400:
+                    fields = ""  # API refused the field mask; fall back to full resources
+                    params.pop("fields")
+                    response = client.get(url, params=params, timeout=30)
                 response.raise_for_status()
                 payload = response.json()
                 agents.extend(payload.get("reasoningEngines", []))

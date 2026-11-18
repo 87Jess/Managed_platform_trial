@@ -655,6 +655,20 @@ def test_list_agents_pages_through_results(tmp_path):
     assert url == ("https://us-central1-aiplatform.googleapis.com/v1/projects/example-project/"
                    "locations/us-central1/reasoningEngines")
     assert session.get.call_args_list[1].kwargs["params"]["pageToken"] == "next"
+    assert "reasoningEngines(name,displayName" in session.get.call_args_list[0].kwargs["params"]["fields"]
+    assert "inlineSource" not in session.get.call_args_list[0].kwargs["params"]["fields"]
+
+
+def test_list_agents_falls_back_when_field_mask_is_rejected(tmp_path):
+    session = MagicMock()
+    session.__enter__.return_value = session
+    rejected, full = MagicMock(status_code=400), MagicMock(status_code=200)
+    full.json.return_value = {"reasoningEngines": [{"name": "a"}]}
+    session.get.side_effect = [rejected, full]
+    cloud = AgentEngineCloud(ConsoleConfig(source_root=tmp_path, project="example-project"))
+    cloud.session = lambda: session
+    assert [agent["name"] for agent in cloud.list_agents()] == ["a"]
+    assert "fields" not in session.get.call_args_list[1].kwargs["params"]
 
 
 def test_failed_deployment_exposes_logs_link_logs_and_hints(console, monkeypatch):
