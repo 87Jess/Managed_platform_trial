@@ -156,3 +156,13 @@ td.resource-cell{color:#5f6368}
 .garden-empty svg{width:28px;height:28px;color:#1a73e8}
 .garden-empty strong{color:#202124;font-size:14px;font-weight:500}
 @media(max-width:600px){.sidebar nav{display:grid;grid-template-columns:1fr 1fr;gap:5px}.nav-link{justify-content:flex-start;padding:9px 10px}.nav-link .nav-arrow,.nav-link.active .nav-arrow{display:none}.search-field{min-width:0;max-width:none;flex-basis:100%}.garden-grid{grid-template-columns:1fr}}
+
+/* ---- Container logs ---- */
+.logs-panel{border:1px solid #dadce0;border-radius:8px;padding:12px;margin:12px 0;background:#fff}
+.logs-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.logs-head h3{font-size:13px;font-weight:500}
+.logs-head span{display:block;font-size:11px;color:#5f6368;margin-top:2px}
+.logs-actions{display:flex;gap:6px}
+.logs-actions .button{min-height:30px;padding:5px 9px;font-size:11px}
+.logs-output{margin:10px 0 0;max-height:300px;overflow:auto;background:#202124;color:#e8eaed;border-radius:6px;padding:10px;font:11px/1.55 'Cascadia Code',Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+.log-line.severe{color:#f28b82}

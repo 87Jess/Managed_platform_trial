@@ -119,6 +119,38 @@ function updateApproval() {
   byId("lock-state").hidden = Boolean(state.config?.deployment_enabled);
 }
 
+const logs = { planId: "", loading: false };
+async function loadLogs(plan) {
+  if (logs.loading) return;
+  logs.loading = true; logs.planId = plan.id;
+  byId("logs-refresh").disabled = true;
+  setText("logs-meta", "Reading the container's output from Cloud Logging...");
+  try {
+    const data = await api(`/api/plans/${plan.id}/logs`);
+    byId("logs-explorer").href = plan.logs_url || data.explorer_url;
+    byId("logs-hints").replaceChildren(...data.hints.map((hint) => alertBox("info", `Likely cause: ${hint}`)));
+    const output = byId("logs-output");
+    if (!data.lines.length) {
+      setText("logs-meta", `No log lines yet for engine ${data.engine_id}. Logs can take a minute to arrive; refresh shortly.`);
+      output.replaceChildren(); output.hidden = true;
+    } else {
+      setText("logs-meta", `${data.lines.length} most recent lines from engine ${data.engine_id}`);
+      output.hidden = false;
+      output.replaceChildren(...data.lines.map((line) => {
+        const row = document.createElement("span");
+        const severe = ["ERROR", "CRITICAL", "ALERT", "EMERGENCY"].includes(line.severity) || /Traceback|Error|Exception/.test(line.text);
+        row.className = severe ? "log-line severe" : "log-line";
+        row.textContent = `${line.time ? line.time.slice(11, 19) : ""}  ${line.text}\n`;
+        return row;
+      }));
+      output.scrollTop = output.scrollHeight;
+    }
+  } catch (error) {
+    setText("logs-meta", error.message);
+    byId("logs-output").hidden = true;
+  } finally { logs.loading = false; byId("logs-refresh").disabled = false; icons(); }
+}
+
 function showPlan(plan, resetApproval = false) {
   state.plan = plan;
   byId("review-empty").hidden = true;
@@ -146,6 +178,9 @@ function showPlan(plan, resetApproval = false) {
   if (plan.status_check) alerts.push(alertBox("warning", `${plan.status_check}. The deployment may still be running in Google Cloud.`));
   for (const warning of plan.warnings || []) alerts.push(alertBox("warning", warning));
   byId("plan-alerts").replaceChildren(...alerts);
+  const showLogs = ["failed", "unknown"].includes(plan.status) && Boolean(plan.operation);
+  byId("logs-panel").hidden = !showLogs;
+  if (showLogs && logs.planId !== plan.id) { byId("logs-hints").replaceChildren(); byId("logs-output").replaceChildren(); loadLogs(plan); }
   const live = plan.status === "succeeded" && Boolean(plan.resource);
   if (live && !garden.known?.has(plan.resource)) { garden.loaded = false; (garden.known ||= new Set()).add(plan.resource); }
   byId("success-panel").hidden = !live;
@@ -267,6 +302,7 @@ async function loadGarden() {
   } finally { garden.loading = false; button.disabled = false; renderGarden(); }
 }
 byId("garden-refresh").addEventListener("click", loadGarden);
+byId("logs-refresh").addEventListener("click", () => { if (state.plan) loadLogs(state.plan); });
 byId("garden-filter").addEventListener("input", renderGarden);
 
 function renderHistory() {

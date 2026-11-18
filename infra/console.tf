@@ -23,6 +23,7 @@ resource "google_project_iam_member" "console" {
     "roles/aiplatform.user",
     "roles/serviceusage.serviceUsageViewer",
     "roles/compute.networkViewer",
+    "roles/logging.viewer", # container logs of failed agent deployments
   ])
   project = var.project_id
   role    = each.value

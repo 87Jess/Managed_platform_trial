@@ -77,6 +77,12 @@
             <div class="snapshot-name"><i data-lucide="box"></i><h3 id="snapshot-name"></h3><button class="icon-button" id="download-plan" type="button" title="Download deployment plan" aria-label="Download deployment plan"><i data-lucide="download"></i></button></div>
             <ol id="progress-steps" class="progress-steps" aria-label="Deployment progress"></ol>
             <div id="plan-alerts" class="plan-alerts" aria-live="polite"></div>
+            <section id="logs-panel" class="logs-panel" aria-labelledby="logs-title" hidden>
+              <div class="logs-head"><div><h3 id="logs-title">Container logs</h3><span id="logs-meta">Recent output from the agent's container</span></div>
+                <div class="logs-actions"><button id="logs-refresh" class="button secondary" type="button"><i data-lucide="refresh-cw"></i><span>Refresh</span></button><a id="logs-explorer" class="button secondary" target="_blank" rel="noreferrer"><i data-lucide="external-link"></i><span>Logs Explorer</span></a></div></div>
+              <div id="logs-hints" class="plan-alerts"></div>
+              <pre id="logs-output" class="logs-output"></pre>
+            </section>
             <div id="success-panel" class="success-panel" hidden>
               <div class="success-head"><i data-lucide="circle-check-big"></i><div><strong>Agent is live on Agent Engine</strong><span id="success-meta"></span></div></div>
               <label class="result-label">Resource name</label>

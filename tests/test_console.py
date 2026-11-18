@@ -655,3 +655,55 @@ def test_list_agents_pages_through_results(tmp_path):
     assert url == ("https://us-central1-aiplatform.googleapis.com/v1/projects/example-project/"
                    "locations/us-central1/reasoningEngines")
     assert session.get.call_args_list[1].kwargs["params"]["pageToken"] == "next"
+
+
+def test_failed_deployment_exposes_logs_link_logs_and_hints(console, monkeypatch):
+    client, cloud, source = console
+    logs_url = "https://console.cloud.google.com/logs/query;query=x"
+    monkeypatch.setattr(cloud, "status", lambda name: {"done": True, "error": {
+        "code": 3, "message": "The Reasoning Engine's container failed to start.",
+        "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                     "reason": "REASONING_ENGINE_CONTAINER_FAILED_TO_START",
+                     "metadata": {"logs_url": logs_url}}]}})
+    calls = []
+    def container_logs(engine_id, since):
+        calls.append(engine_id)
+        return [{"time": "2026-11-18T10:00:01Z", "severity": "ERROR", "stream": "stderr",
+                 "text": "ModuleNotFoundError: No module named 'google.adk'"}]
+    monkeypatch.setattr(cloud, "container_logs", container_logs, raising=False)
+    monkeypatch.setattr(cloud, "submit", lambda body: {
+        "name": "projects/123/locations/us-central1/reasoningEngines/456/operations/9"})
+    plan = plan_for(client, source)
+    assert client.get(f"/api/plans/{plan['id']}/logs").status_code == 409
+    approve(client, plan)
+    result = client.get(f"/api/plans/{plan['id']}").json()
+    assert result["status"] == "failed"
+    assert result["logs_url"] == logs_url
+    logs = client.get(f"/api/plans/{plan['id']}/logs").json()
+    assert calls == ["456"]
+    assert logs["engine_id"] == "456"
+    assert logs["lines"][0]["text"].startswith("ModuleNotFoundError")
+    assert any("google.adk" in hint for hint in logs["hints"])
+    assert "reasoning_engine_id" in logs["explorer_url"]
+    assert logs["explorer_url"].endswith("?project=example-project")
+
+
+def test_container_logs_queries_cloud_logging(tmp_path):
+    session = MagicMock()
+    session.__enter__.return_value = session
+    session.post.return_value.json.return_value = {"entries": [
+        {"timestamp": "t2", "severity": "ERROR", "textPayload": "boom",
+         "logName": "projects/p/logs/aiplatform.googleapis.com%2Freasoning_engine_stderr"},
+        {"timestamp": "t1", "jsonPayload": {"message": "starting"}},
+    ]}
+    cloud = AgentEngineCloud(ConsoleConfig(source_root=tmp_path, project="example-project"))
+    cloud.session = lambda: session
+    lines = cloud.container_logs("42", since=1_800_000_000)
+    assert [line["text"] for line in lines] == ["starting", "boom"]
+    assert lines[1]["stream"] == "stderr"
+    body = session.post.call_args.kwargs["json"]
+    assert body["resourceNames"] == ["projects/example-project"]
+    assert 'resource.labels.reasoning_engine_id="42"' in body["filter"]
+    assert 'resource.type="aiplatform.googleapis.com/ReasoningEngine"' in body["filter"]
+    with pytest.raises(Exception, match="Unexpected"):
+        cloud.container_logs('42" OR true', since=0)

@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 import google.auth
 import httpx
@@ -222,6 +223,32 @@ class AgentEngineCloud:
             raise SourceError("Cloud returned an unexpected operation name")
         return match.group(1)
 
+    def container_logs(self, engine_id: str, since: float, limit: int = 80):
+        """Recent stdout/stderr lines of an Agent Engine container from Cloud Logging, oldest first."""
+        if not re.fullmatch(r"[0-9]+", engine_id):
+            raise SourceError("Unexpected Agent Engine ID")
+        start = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(max(0, since - 300)))
+        with self.session() as client:
+            response = client.post("https://logging.googleapis.com/v2/entries:list", json={
+                "resourceNames": [f"projects/{self.config.project}"],
+                "filter": (f'resource.type="aiplatform.googleapis.com/ReasoningEngine" '
+                           f'AND resource.labels.reasoning_engine_id="{engine_id}" '
+                           f'AND timestamp>="{start}"'),
+                "orderBy": "timestamp desc", "pageSize": limit,
+            }, timeout=30)
+            response.raise_for_status()
+            entries = response.json().get("entries", [])
+        lines = []
+        for entry in reversed(entries):
+            payload = entry.get("textPayload")
+            if payload is None:
+                body = entry.get("jsonPayload", {}) or {}
+                payload = body.get("message") or json.dumps(body)[:2000]
+            lines.append({"time": entry.get("timestamp", ""), "severity": entry.get("severity", "DEFAULT"),
+                          "stream": "stderr" if str(entry.get("logName", "")).endswith("stderr") else "stdout",
+                          "text": str(payload)[:4000]})
+        return lines
+
     def list_agents(self, max_pages: int = 5):
         """Agent Engine resources in the project and region (the console's Agent Platform runtimes)."""
         url = (f"https://{self.config.region}-aiplatform.googleapis.com/v1/projects/"
@@ -263,6 +290,57 @@ def google_error(error: HTTPError) -> str:
     except (ValueError, AttributeError):
         pass
     return f"HTTP {response.status_code}" + (f": {detail[:400]}" if detail else "")
+
+
+def find_logs_url(value) -> str:
+    """Google attaches the failed container's logs link to the operation error's details."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"logs_url", "logsUrl"} and isinstance(item, str) and item.startswith("https://"):
+                return item
+            found = find_logs_url(item)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = find_logs_url(item)
+            if found:
+                return found
+    return ""
+
+
+LOG_HINTS = [
+    (r"No module named 'vertexai",
+     ("The Google ADK wrapper needs google-cloud-aiplatform[agent_engines,adk] "
+      "in the agent's dependencies.")),
+    (r"No module named '(?!vertexai)([\w.]+)'",
+     ("Python could not import '{0}'. Add the package that provides it to requirements.txt "
+      "(or pyproject.toml/uv.lock) and redeploy.")),
+    (r"attempted relative import|ImportError: cannot import name",
+     ("An import inside the agent failed. If agent.py uses relative imports (from . import ...), "
+      "set the entrypoint module to the package path, for example weather_agent.agent, "
+      "or use absolute imports.")),
+    (r"has no attribute '(\w+)'",
+     ("The entrypoint object is missing an attribute '{0}'. Check the entrypoint object name "
+      "and the selected agent framework.")),
+    (r"GOOGLE_API_KEY|API key",
+     ("The agent expects an API key. On Agent Engine, use Vertex AI credentials "
+      "(GOOGLE_GENAI_USE_VERTEXAI=true) instead of an API key.")),
+    (r"PermissionDenied|403 ",
+     "The agent's runtime identity lacks a permission it needs at startup."),
+]
+
+
+def log_hints(lines: list[dict]) -> list[str]:
+    text = "\n".join(line["text"] for line in lines)
+    hints = []
+    for pattern, message in LOG_HINTS:
+        match = re.search(pattern, text)
+        if match:
+            hint = message.format(*match.groups())
+            if hint not in hints:
+                hints.append(hint)
+    return hints[:3]
 
 
 def operation_error(error: dict) -> str:
@@ -506,6 +584,35 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
                 "sandbox_enabled": config.sandbox_enabled, "sandbox_engine": config.sandbox_engine,
                 "sandbox_required": config.require_sandbox_test}
 
+    @app.get("/api/plans/{plan_id}/logs")
+    def plan_logs(plan_id: str):
+        with lock:
+            plan = plans.get(plan_id)
+            if plan is None:
+                raise HTTPException(404, "Plan expired or was not found")
+            operation, since = plan["operation"], plan["submitted_at"] or plan["created_at"]
+            resource = plan["resource"]
+        match = re.search(r"/reasoningEngines/([0-9]+)", operation) or re.search(
+            r"/reasoningEngines/([0-9]+)$", resource)
+        if not match:
+            raise HTTPException(409, "This snapshot has not created an Agent Engine resource yet")
+        engine_id = match.group(1)
+        query = (f'resource.type="aiplatform.googleapis.com/ReasoningEngine"\n'
+                 f'resource.labels.reasoning_engine_id="{engine_id}"')
+        explorer = (f"https://console.cloud.google.com/logs/query;query={quote(query, safe='')}"
+                    f"?project={config.project}")
+        try:
+            lines = cloud.container_logs(engine_id, since)
+        except GoogleAuthError:
+            raise HTTPException(502, "Google credentials are unavailable or expired") from None
+        except HTTPError as error:
+            raise HTTPException(502, f"Could not read container logs ({google_error(error)}). "
+                                     "Reading logs needs roles/logging.viewer.") from None
+        except (RequestException, ValueError, SourceError):
+            raise HTTPException(502, "Could not reach Cloud Logging; retry") from None
+        return {"engine_id": engine_id, "lines": lines, "hints": log_hints(lines),
+                "explorer_url": explorer}
+
     @app.get("/api/agents")
     def list_agents():
         try:
@@ -588,7 +695,7 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
                 "message": "Snapshot ready for approval", "sandbox": {"status": "not_run"},
                 "reviewed_by": request.state.user, "approved_by": "",
                 "warnings": source_warnings(files, data.framework), "status_check": "",
-                "submitted_at": 0, "completed_at": 0,
+                "submitted_at": 0, "completed_at": 0, "logs_url": "",
                 "bundle": bundle, "input": data}
         with lock:
             if len(plans) >= 8:
@@ -697,6 +804,7 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
                         plan["status"] = "failed"
                         plan["message"] = ("Agent Engine reported a deployment failure: "
                                            + operation_error(result["error"]))
+                        plan["logs_url"] = find_logs_url(result["error"])
                     else:
                         plan["status"] = "succeeded"
                         plan["resource"] = result.get("response", {}).get("name", "") or (
