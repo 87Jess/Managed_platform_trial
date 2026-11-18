@@ -508,7 +508,8 @@ function applyMethod(method) {
   const schema = agent.method_schemas?.[method];
   const built = inputFromSchema(schema);
   const fallback = testDefaults(agent);
-  byId("test-input").value = JSON.stringify(built ? built.input : fallback.input, null, 2);
+  tester.baseInput = built ? built.input : fallback.input;
+  byId("test-input").value = JSON.stringify(tester.baseInput, null, 2);
   byId("test-schema").textContent = schema && Object.keys(schema).length ? JSON.stringify(schema, null, 2) : "This agent didn't publish a schema for this method.";
   const natural = !built || textKeys.includes(built.textKey);
   setSuggestions(built?.enumValues?.slice(0, 4) || (natural ? ["Hi! What can you do?", "Show me an example of what you're good at"] : []));
@@ -540,6 +541,14 @@ function setSuggestions(prompts) {
     const chip = el("button", "press", label); chip.type = "button";
     chip.addEventListener("click", () => {
       if (typeof prompt === "string") { byId("test-message").value = prompt; byId("test-form").requestSubmit(); return; }
+      if (prompt.message !== undefined) {
+        // The agent takes the command as text in its message field: put it in the chat box.
+        byId("test-input").value = JSON.stringify(tester.baseInput, null, 2);
+        byId("test-message").value = prompt.message; autosize();
+        if (prompt.send) { byId("test-form").requestSubmit(); return; }
+        bubble("system", prompt.note || "Edit the command in the message box, then press Send.");
+        byId("test-message").focus(); return;
+      }
       byId("test-input").value = JSON.stringify(prompt.input, null, 2);
       byId("test-message").value = label;
       if (prompt.send) { byId("test-form").requestSubmit(); return; }
@@ -571,23 +580,31 @@ function examplesFromError(message) {
   return found;
 }
 const looksLikePlaceholder = (value) => typeof value === "string" && /^[A-Z][A-Z0-9_]{2,}$/.test(value);
+// The input key that carries the typed text ("{message}"), if the agent's input has one.
+function textField() { return Object.keys(tester.baseInput || {}).find((key) => tester.baseInput[key] === "{message}"); }
+// A command chip: agents with a text field get the command as JSON text in the chat box,
+// others get it as the whole input.
+function commandChip(command, label, send, note) {
+  if (textField()) return { label, message: JSON.stringify(command), send, note: note.replace("input JSON", "message box") };
+  return { label, input: command, send, note };
+}
 function exampleChip(example) {
   const values = Object.values(example);
   const needsEditing = values.some(looksLikePlaceholder) || values.some((value) => value && typeof value === "object" && !Object.keys(value).length);
   const label = Object.values(example).find((value) => typeof value === "string" && !looksLikePlaceholder(value)) || JSON.stringify(example);
-  return { label: needsEditing ? `${label} …` : label, input: example, send: !needsEditing,
-    note: "Replace the placeholder values (like TOOL_NAME) in the input JSON, then press Send." };
+  return commandChip(example, needsEditing ? `${label} …` : label, !needsEditing,
+    "Replace the placeholder values (like TOOL_NAME) in the input JSON, then press Send.");
 }
 
 // Tool servers answer list_tools with a list of tools: offer a ready-made call for each.
 function toolChips(output) {
-  const tools = Array.isArray(output?.tools) ? output.tools : Array.isArray(output) ? output : null;
+  const tools = [output?.tools, output?.result?.tools, output?.result?.result?.tools, output].find(Array.isArray) || null;
   if (!tools) return [];
   return tools.filter((tool) => tool && typeof tool.name === "string").slice(0, 6).map((tool) => {
     const schema = tool.inputSchema || tool.input_schema || tool.parameters || {};
     const args = Object.fromEntries(Object.keys(schema.properties || {}).map((key) => [key, ""]));
-    return { label: `Call ${tool.name}`, input: { action: "call_tool", name: tool.name, arguments: args },
-      note: Object.keys(args).length ? `Fill in the arguments for ${tool.name} (${Object.keys(args).join(", ")}), then press Send.` : `Add any arguments ${tool.name} needs, then press Send.` };
+    return commandChip({ action: "call_tool", name: tool.name, arguments: args }, `Call ${tool.name}`, false,
+      Object.keys(args).length ? `Fill in the arguments for ${tool.name} (${Object.keys(args).join(", ")}) in the input JSON, then press Send.` : `Add any arguments ${tool.name} needs in the input JSON, then press Send.`);
   });
 }
 function openTester(agent) {
@@ -799,8 +816,13 @@ byId("test-form").addEventListener("submit", async (event) => {
       card.append(summary, el("pre", "", `${call.data}${result ? `\n→ ${result.data}` : ""}`));
       reply.append(card);
     }
+    // MCP tool results carry their answer as text content blocks: show that text first.
+    const mcpText = [data.output?.result?.content, data.output?.content].find(Array.isArray)?.filter((block) => block?.type === "text" && block.text).map((block) => block.text).join("\n\n");
+    if (!data.reply && mcpText) data.reply = mcpText;
     const structured = !data.reply && data.output !== undefined && data.output !== null && typeof data.output === "object";
-    reply.append(el("div", structured ? "text json" : "text", data.reply || (data.output !== undefined ? JSON.stringify(data.output, null, 2) : "(no text in the response)")));
+    const silent = data.events ? (data.tools?.length ? "The agent used its tools but didn't write a reply. Its tool results are above, and the raw events are below." : "The agent didn't send any text back. Open the raw response below to see what it returned.") : "(no text in the response)";
+    if (data.reply || data.output !== undefined || !data.errors?.length) reply.append(el("div", structured ? "text json" : "text", data.reply || (data.output !== undefined ? JSON.stringify(data.output, null, 2) : silent)));
+    for (const problem of data.errors || []) reply.append(el("div", "bubble error", `The agent reported an error: ${problem}`));
     const chips = toolChips(data.output);
     setSuggestions(chips);
     const footer = el("div", "footer"); const raw = el("details", "raw");

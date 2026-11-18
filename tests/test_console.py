@@ -860,3 +860,15 @@ def test_agent_errors_keep_the_agents_explanation(console, monkeypatch):
     detail = client.post("/api/agents/test", json={"name": AGENT, "method": "query",
                                                    "input": {"message": "hi"}}).json()["detail"]
     assert explanation in detail
+
+
+def test_stream_summary_surfaces_agent_error_events():
+    from managed_agents.console import summarize_events
+
+    summary = summarize_events([
+        {"content": {"parts": [{"function_call": {"name": "get_current_weather", "args": {"location": "Las Vegas"}}}]}},
+        {"error_code": "MALFORMED_FUNCTION_CALL", "error_message": "The model returned an invalid call"},
+    ])
+    assert summary["reply"] == ""
+    assert summary["errors"] == ["MALFORMED_FUNCTION_CALL: The model returned an invalid call"]
+    assert summary["tools"][0]["name"] == "get_current_weather"

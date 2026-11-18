@@ -432,11 +432,16 @@ def log_hints(lines: list[dict]) -> list[str]:
 
 def summarize_events(events: list) -> dict:
     """Pull the reply text and tool activity out of ADK-style stream events."""
-    reply, tools = [], []
+    reply, tools, errors = [], [], []
     for event in events:
         if not isinstance(event, dict):
             reply.append(str(event))
             continue
+        # ADK reports failures (model errors, timeouts) as events with an error message, not text.
+        problem = event.get("error_message") or event.get("errorMessage")
+        if problem or event.get("error_code") or event.get("errorCode"):
+            code = event.get("error_code") or event.get("errorCode") or ""
+            errors.append(f"{code}: {problem}" if code and problem else str(problem or code))
         content = event.get("content") or {}
         for part in content.get("parts", []) if isinstance(content, dict) else []:
             if not isinstance(part, dict):
@@ -451,7 +456,7 @@ def summarize_events(events: list) -> dict:
             if result:
                 tools.append({"kind": "result", "name": result.get("name", ""),
                               "data": json.dumps(result.get("response", {}))[:500]})
-    return {"reply": "".join(reply).strip(), "tools": tools}
+    return {"reply": "".join(reply).strip(), "tools": tools, "errors": errors}
 
 
 def operation_error(error: dict) -> str:
