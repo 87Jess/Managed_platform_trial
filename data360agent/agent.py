@@ -200,8 +200,14 @@ def clean_schema(schema: Any) -> dict[str, Any]:
         kind = next((item for item in kind if item != "null"), "string")
     if kind is None:
         options = schema.get("anyOf") or schema.get("oneOf") or []
-        kind = next((option.get("type") for option in options
-                     if isinstance(option, dict) and option.get("type") not in (None, "null")), None)
+        selected = next((option for option in options
+                         if isinstance(option, dict)
+                         and option.get("type") not in (None, "null")), None)
+        if selected is not None:
+            schema = {**selected, **{
+                key: value for key, value in schema.items() if key not in {"anyOf", "oneOf"}
+            }}
+            kind = schema.get("type")
         kind = kind or ("object" if "properties" in schema else "string")
     cleaned: dict[str, Any] = {"type": kind}
     for key in _SCHEMA_KEYS - {"type", "properties", "items", "required"}:

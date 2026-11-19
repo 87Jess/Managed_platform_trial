@@ -6,7 +6,38 @@ from unittest.mock import patch
 
 import httpx
 
-from data360agent.agent import MCP_ENDPOINT, Data360Agent, Data360MCPClient
+from data360agent.agent import MCP_ENDPOINT, Data360Agent, Data360MCPClient, clean_schema
+
+
+class Data360SchemaTests(unittest.TestCase):
+    def test_nullable_array_preserves_item_type(self) -> None:
+        schema = {
+            "anyOf": [
+                {"type": "array", "items": {"type": "integer"}},
+                {"type": "null"},
+            ],
+            "description": "Observation years",
+        }
+        self.assertEqual(clean_schema(schema), {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "Observation years",
+        })
+
+    def test_nullable_object_preserves_properties_and_required_fields(self) -> None:
+        schema = {"oneOf": [
+            {"type": "null"},
+            {
+                "type": "object",
+                "properties": {"country": {"type": "string"}},
+                "required": ["country"],
+            },
+        ]}
+        self.assertEqual(clean_schema(schema), {
+            "type": "object",
+            "properties": {"country": {"type": "string"}},
+            "required": ["country"],
+        })
 
 
 class Data360MCPClientTests(unittest.TestCase):

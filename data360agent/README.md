@@ -49,11 +49,26 @@ the console shows that reason above the reply. The console's Chat also sends ear
 Tool results are treated as data, capped at 12,000 characters each, and the loop stops after
 8 tool rounds with a request to narrow the question.
 
+## Local interactive chat
+
+From the repository root in PowerShell, run:
+
+```powershell
+$env:GOOGLE_CLOUD_PROJECT = "itsai-mai-gcp-lab-proj"
+uv run --with-requirements .\data360agent\requirements.txt python .\tests\test_chat.py
+```
+
+The launcher resolves the repository import path automatically; no `PYTHONPATH` setting
+is needed. Enter `quit` or `exit` to stop. Chat requires Application Default Credentials
+with Vertex AI model access, and model calls may incur charges.
+
 ## Tests
 
 ```bash
 pip install -r data360agent/requirements.txt pytest
-python -m pytest tests/test_data360_agent.py
+python -m pytest tests/test_data360agent.py tests/test_data360_agent.py
 ```
 
 They run offline with a scripted model and a fake MCP server.
+The MCP and schema-conversion tests run without the optional LangGraph/Gemini packages;
+the conversation test module is skipped when those packages are missing.
