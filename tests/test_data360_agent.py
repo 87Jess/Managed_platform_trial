@@ -216,3 +216,17 @@ def test_network_diagnosis_tells_private_from_public(monkeypatch):
 
     monkeypatch.setattr(socket, "getaddrinfo", fail)
     assert "DNS lookup" in data360.network_diagnosis()
+
+
+def test_proxy_setting(monkeypatch):
+    monkeypatch.delenv("DATA360_PROXY", raising=False)
+    assert data360.mcp_proxy() is None
+    monkeypatch.setenv("DATA360_PROXY", "http://10.10.0.5:3128")
+    assert data360.mcp_proxy() == "http://10.10.0.5:3128"
+    seen = {}
+    monkeypatch.setattr(data360.httpx, "Client", lambda **kwargs: seen.update(kwargs))
+    data360.Data360MCPClient()
+    assert seen["proxy"] == "http://10.10.0.5:3128" and seen["trust_env"] is False
+    monkeypatch.setenv("DATA360_PROXY", "http://user:secret@proxy:3128")
+    with pytest.raises(data360.MCPError, match="DATA360_PROXY"):
+        data360.mcp_proxy()
