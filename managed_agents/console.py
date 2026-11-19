@@ -207,8 +207,8 @@ class AgentEngineCloud:
             self.config.allow_deploy and self.config.security_review_approved) else "blocked",
             "message": "Cloud submission enabled" if (
                 self.config.allow_deploy and self.config.security_review_approved) else
-            "Console is locked. Restart it with: uv run python -m managed_agents.console --poc "
-            "(or set CONSOLE_ALLOW_DEPLOY=1 and CONSOLE_SECURITY_REVIEW_APPROVED=1)"}]
+            "Locked. For a demo, restart the console with --poc. Otherwise set "
+            "CONSOLE_ALLOW_DEPLOY=1 and CONSOLE_SECURITY_REVIEW_APPROVED=1."}]
         endpoints = [
             ("billing", f"https://cloudbilling.googleapis.com/v1/projects/{project}/billingInfo", "billingEnabled", True),
             ("vertex_api", f"https://serviceusage.googleapis.com/v1/projects/{project}/services/aiplatform.googleapis.com", "state", "ENABLED"),
