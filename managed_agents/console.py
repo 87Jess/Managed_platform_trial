@@ -217,12 +217,12 @@ class AgentEngineCloud:
             endpoints.append(("runtime_account", f"https://iam.googleapis.com/v1/projects/{project}/serviceAccounts/{self.config.account}", "disabled", False))
         else:
             checks.append({"id": "runtime_account", "status": "skipped",
-                           "message": "Using the Agent Engine default service agent (CONSOLE_RUNTIME_ACCOUNT=default)"})
+                           "message": "Agent Engine default service agent (demo setting)"})
         if self.config.attachment:
             endpoints.append(("psc_attachment", f"https://compute.googleapis.com/compute/v1/{self.config.attachment}", "name", None))
         else:
             checks.append({"id": "psc_attachment", "status": "skipped",
-                           "message": "No private networking (CONSOLE_NETWORK_ATTACHMENT=none)"})
+                           "message": "Standard networking, no private attachment (demo setting)"})
         if self.config.sandbox_engine:
             engine_url = (f"https://{self.config.region}-aiplatform.googleapis.com/"
                           f"v1/{self.config.sandbox_engine}")
