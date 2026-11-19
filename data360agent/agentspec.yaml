@@ -34,6 +34,8 @@ runtime:
     DATA360_MODEL: gemini-2.5-flash
     DATA360_FALLBACK_MODEL: gemini-3-flash-preview
     DATA360_LOCATION: global
+    # Uncomment when the runtime has no direct internet route (VPC Service Controls / private network):
+    # DATA360_PROXY: http://10.10.0.5:3128
 evaluation:
   suites:
     - name: golden-indicators

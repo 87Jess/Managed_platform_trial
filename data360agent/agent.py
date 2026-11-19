@@ -45,6 +45,21 @@ briefly, do not give numbers from memory, and suggest trying again later. You ca
 greet people and explain what you can help with."""
 
 
+def mcp_proxy() -> str | None:
+    """Optional egress proxy for the MCP server (DATA360_PROXY), e.g. http://10.10.0.5:3128.
+
+    Needed when the runtime has no direct internet route (VPC Service Controls or private
+    networking): traffic goes through a proxy in your VPC that allows the Data360 host.
+    Other proxy variables are ignored on purpose (trust_env=False).
+    """
+    proxy = os.environ.get("DATA360_PROXY", "").strip()
+    if not proxy:
+        return None
+    if not re.fullmatch(r"https?://[A-Za-z0-9.-]+(:\d{1,5})?/?", proxy):
+        raise MCPError("DATA360_PROXY must look like http://HOST:PORT (no credentials or path)")
+    return proxy
+
+
 class MCPError(RuntimeError):
     pass
 
@@ -54,7 +69,8 @@ class Data360MCPClient:
 
     def __init__(self, http_client: httpx.Client | None = None) -> None:
         self._owns_client = http_client is None
-        self._http = http_client or httpx.Client(timeout=30, follow_redirects=False, trust_env=False)
+        self._http = http_client or httpx.Client(timeout=30, follow_redirects=False, trust_env=False,
+                                                 proxy=mcp_proxy())
 
     def __enter__(self) -> Self:
         return self
@@ -182,7 +198,8 @@ def network_diagnosis(url: str = MCP_ENDPOINT) -> str:
     private = [address for address in addresses if not ipaddress.ip_address(address).is_global]
     verdict = ("resolves only to private addresses, so it is reachable only from a private network"
                if private and len(private) == len(addresses) else
-               "resolves to public addresses, so the runtime has no outbound internet route")
+               "resolves to public addresses, so the runtime has no outbound internet route; "
+               "set DATA360_PROXY to a proxy in your VPC that allows this host")
     return f"{host} -> {', '.join(addresses[:4])}: {verdict}"
 
 

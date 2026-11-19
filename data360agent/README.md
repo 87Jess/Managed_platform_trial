@@ -32,6 +32,7 @@ default service agent normally has it) and the runtime needs outbound HTTPS to
 | `DATA360_FALLBACK_MODEL` | `gemini-3-flash-preview` | Used if the first model is not found (e.g. retired) |
 | `DATA360_LOCATION` | `global` | Vertex AI location for the model |
 | `GOOGLE_CLOUD_PROJECT` | project of the credentials | Project billed for Gemini calls |
+| `DATA360_PROXY` | none | HTTP proxy for the Data360 server, e.g. `http://10.10.0.5:3128`, when the runtime has no direct internet route |
 
 ## Inputs
 
