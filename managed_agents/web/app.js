@@ -239,6 +239,29 @@ function querySnippet(plan) {
 
 function setStatusMark(id, kind) { byId(id).className = `status-mark ${kind}`; }
 
+const specFrameworks = { adk: "Google ADK", langgraph: "LangGraph", langchain: "LangChain", custom: "Custom Python" };
+// The agent's AgentSpec (agentspec.yaml), when its folder has one: who owns it and what it needs.
+function renderSpec(plan) {
+  const spec = plan.agentspec;
+  byId("spec-section").hidden = !spec;
+  if (!spec) return;
+  setText("spec-badge", `AgentSpec · ${spec.name} v${spec.version}`);
+  setText("spec-file", `from ${plan.agentspec_file} (${spec.api_version})`);
+  const resources = spec.resources;
+  const rows = [
+    ["Owner", `${spec.owner.name} · ${spec.owner.team}`],
+    ["Framework", specFrameworks[spec.framework] || spec.framework],
+    ["Data class", spec.data_classification],
+    ["Models", spec.models.join(", ") || "None"],
+    ["Tools", [...spec.mcp_servers.map((url) => `MCP ${new URL(url).host}`), ...spec.connectors].join(", ") || "None"],
+    ["Runtime", `Python ${spec.python} · ${resources.cpu} CPU · ${resources.memory} · ${resources.min_instances}–${resources.max_instances} instances · ${spec.network} network`],
+    ["Evaluation", spec.evaluation.join(", ") || "None declared"],
+  ];
+  byId("spec-fields").replaceChildren(...rows.map(([label, value]) => {
+    const row = el("div"); row.append(el("dt", "", label), el("dd", "", value)); return row;
+  }));
+}
+
 function showPlan(plan, resetApproval = false) {
   state.plan = plan;
   byId("review-empty").hidden = true;
@@ -255,6 +278,7 @@ function showPlan(plan, resetApproval = false) {
   setText("files-summary", `Files (${plan.files.length})`);
   byId("file-list").replaceChildren(...plan.files.map((file) => { const row = el("li"); row.append(el("span", "", file.path), el("span", "", readableBytes(file.bytes))); return row; }));
   renderTimeline(plan);
+  renderSpec(plan);
 
   const alerts = [];
   if (plan.status === "failed") alerts.push(alertBox("error", plan.message));

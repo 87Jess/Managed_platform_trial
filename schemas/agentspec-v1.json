@@ -1,0 +1,367 @@
+{
+  "$defs": {
+    "Entrypoint": {
+      "additionalProperties": false,
+      "properties": {
+        "module": {
+          "default": "agent",
+          "maxLength": 150,
+          "pattern": "^[A-Za-z_]\\w*(\\.[A-Za-z_]\\w*)*$",
+          "title": "Module",
+          "type": "string"
+        },
+        "object": {
+          "default": "root_agent",
+          "maxLength": 100,
+          "pattern": "^[A-Za-z_]\\w*$",
+          "title": "Object",
+          "type": "string"
+        }
+      },
+      "title": "Entrypoint",
+      "type": "object"
+    },
+    "EvalSuite": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Lowercase letters, digits and hyphens, 3-63 characters",
+          "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$",
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "golden",
+            "safety",
+            "prompt_injection",
+            "custom"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "dataset": {
+          "description": "Path in the agent folder or gs:// URI",
+          "pattern": "^[\\w./-]{1,200}$",
+          "title": "Dataset",
+          "type": "string"
+        },
+        "threshold": {
+          "description": "Minimum pass rate, 0-1",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "dataset",
+        "threshold"
+      ],
+      "title": "EvalSuite",
+      "type": "object"
+    },
+    "Evaluation": {
+      "additionalProperties": false,
+      "properties": {
+        "suites": {
+          "items": {
+            "$ref": "#/$defs/EvalSuite"
+          },
+          "title": "Suites",
+          "type": "array"
+        },
+        "required_before_deploy": {
+          "default": false,
+          "title": "Required Before Deploy",
+          "type": "boolean"
+        }
+      },
+      "title": "Evaluation",
+      "type": "object"
+    },
+    "MCPServer": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Lowercase letters, digits and hyphens, 3-63 characters",
+          "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$",
+          "title": "Name",
+          "type": "string"
+        },
+        "url": {
+          "description": "HTTPS endpoint of the MCP server (streamable HTTP)",
+          "maxLength": 500,
+          "pattern": "^https://[^\\s/?#]+(/[^\\s?#]*)?$",
+          "title": "Url",
+          "type": "string"
+        },
+        "tools": {
+          "description": "Allowed tools; empty means all tools",
+          "items": {
+            "type": "string"
+          },
+          "title": "Tools",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "url"
+      ],
+      "title": "MCPServer",
+      "type": "object"
+    },
+    "ModelRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "e.g. gemini-2.5-flash",
+          "pattern": "^[a-z0-9][a-z0-9.@/_-]{1,99}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "role": {
+          "default": "primary",
+          "enum": [
+            "primary",
+            "fallback"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "location": {
+          "default": "global",
+          "pattern": "^(global|[a-z]+-[a-z]+[0-9]+)$",
+          "title": "Location",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ModelRef",
+      "type": "object"
+    },
+    "Owner": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Accountable person",
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "team": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Team",
+          "type": "string"
+        },
+        "email": {
+          "maxLength": 200,
+          "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+          "title": "Email",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "team",
+        "email"
+      ],
+      "title": "Owner",
+      "type": "object"
+    },
+    "Resources": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "default": "1",
+          "enum": [
+            "1",
+            "2",
+            "4",
+            "8"
+          ],
+          "title": "Cpu",
+          "type": "string"
+        },
+        "memory": {
+          "default": "1Gi",
+          "pattern": "^[1-9][0-9]*(Mi|Gi)$",
+          "title": "Memory",
+          "type": "string"
+        },
+        "min_instances": {
+          "default": 0,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Min Instances",
+          "type": "integer"
+        },
+        "max_instances": {
+          "default": 2,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Instances",
+          "type": "integer"
+        }
+      },
+      "title": "Resources",
+      "type": "object"
+    },
+    "Runtime": {
+      "additionalProperties": false,
+      "properties": {
+        "python": {
+          "default": "3.12",
+          "enum": [
+            "3.10",
+            "3.11",
+            "3.12",
+            "3.13"
+          ],
+          "title": "Python",
+          "type": "string"
+        },
+        "requirements": {
+          "default": "requirements.txt",
+          "pattern": "^[\\w./-]{1,150}$",
+          "title": "Requirements",
+          "type": "string"
+        },
+        "resources": {
+          "$ref": "#/$defs/Resources"
+        },
+        "network": {
+          "default": "public",
+          "description": "private requires the platform's Private Service Connect attachment",
+          "enum": [
+            "public",
+            "private"
+          ],
+          "title": "Network",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Non-secret environment variables only",
+          "title": "Env",
+          "type": "object"
+        }
+      },
+      "title": "Runtime",
+      "type": "object"
+    },
+    "Tools": {
+      "additionalProperties": false,
+      "properties": {
+        "mcp_servers": {
+          "items": {
+            "$ref": "#/$defs/MCPServer"
+          },
+          "title": "Mcp Servers",
+          "type": "array"
+        },
+        "connectors": {
+          "description": "Platform registry connector IDs",
+          "items": {
+            "description": "Lowercase letters, digits and hyphens, 3-63 characters",
+            "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$",
+            "type": "string"
+          },
+          "title": "Connectors",
+          "type": "array"
+        }
+      },
+      "title": "Tools",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "agentspec/v1",
+      "title": "Apiversion",
+      "type": "string"
+    },
+    "name": {
+      "description": "Lowercase letters, digits and hyphens, 3-63 characters",
+      "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$",
+      "title": "Name",
+      "type": "string"
+    },
+    "version": {
+      "description": "Semantic version of the agent",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?$",
+      "title": "Version",
+      "type": "string"
+    },
+    "description": {
+      "default": "",
+      "maxLength": 500,
+      "title": "Description",
+      "type": "string"
+    },
+    "owner": {
+      "$ref": "#/$defs/Owner"
+    },
+    "framework": {
+      "enum": [
+        "adk",
+        "langgraph",
+        "langchain",
+        "custom"
+      ],
+      "title": "Framework",
+      "type": "string"
+    },
+    "entrypoint": {
+      "$ref": "#/$defs/Entrypoint"
+    },
+    "data_classification": {
+      "enum": [
+        "public",
+        "internal",
+        "confidential"
+      ],
+      "title": "Data Classification",
+      "type": "string"
+    },
+    "models": {
+      "description": "Models the agent calls; empty if none",
+      "items": {
+        "$ref": "#/$defs/ModelRef"
+      },
+      "title": "Models",
+      "type": "array"
+    },
+    "tools": {
+      "$ref": "#/$defs/Tools"
+    },
+    "runtime": {
+      "$ref": "#/$defs/Runtime"
+    },
+    "evaluation": {
+      "$ref": "#/$defs/Evaluation"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "name",
+    "version",
+    "owner",
+    "framework",
+    "data_classification"
+  ],
+  "title": "AgentSpec v1",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-platform.internal/schemas/agentspec-v1.json"
+}

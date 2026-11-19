@@ -1,0 +1,46 @@
+# AgentSpec for the World Bank Data360 agent. Schema: schemas/agentspec-v1.json, rules: docs/agentspec.md
+apiVersion: agentspec/v1
+name: data360-agent
+version: 1.0.0
+description: Answers questions about World Bank development data using the Data360 MCP tools.
+owner:
+  name: Platform Team
+  team: ITSAI AI-Platform
+  email: ai-platform@example.org
+framework: langgraph
+entrypoint:
+  module: agent
+  object: root_agent
+data_classification: public
+models:
+  - id: gemini-2.5-flash
+    role: primary
+  - id: gemini-3-flash-preview
+    role: fallback
+tools:
+  mcp_servers:
+    - name: data360
+      url: https://maimcpext.worldbank.org/ext/data360/mcp
+runtime:
+  python: "3.12"
+  requirements: requirements.txt
+  network: public
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    min_instances: 0
+    max_instances: 2
+  env:
+    DATA360_MODEL: gemini-2.5-flash
+    DATA360_FALLBACK_MODEL: gemini-3-flash-preview
+    DATA360_LOCATION: global
+evaluation:
+  suites:
+    - name: golden-indicators
+      kind: golden
+      dataset: evals/golden.jsonl
+      threshold: 0.8
+    - name: injection
+      kind: prompt_injection
+      dataset: evals/injection.jsonl
+      threshold: 1.0

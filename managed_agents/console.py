@@ -28,6 +28,15 @@ from google.auth.transport.requests import AuthorizedSession
 from pydantic import Field
 from requests.exceptions import HTTPError, RequestException
 
+from managed_agents.agentspec import (
+    ENGINE_FRAMEWORKS,
+    PACKAGING,
+    AgentSpec,
+    AgentSpecError,
+    check_files,
+    find_spec,
+    load_spec,
+)
 from managed_agents.policy import StrictModel
 from managed_agents.sandbox import SandboxError, SandboxRunner
 from managed_agents.sources import (
@@ -540,15 +549,16 @@ def github_files(location: str, revision: str):
     return zip_files(payload.getvalue())
 
 
-def deployment_body(config: ConsoleConfig, data: DeploymentInput, bundle: Bundle):
+def deployment_body(config: ConsoleConfig, data: DeploymentInput, bundle: Bundle,
+                    spec: AgentSpec | None = None):
     body = {
         "displayName": data.display_name,
         "labels": {"managed-by": "agent-platform-console", "source-sha": bundle.digest[:63]},
         "spec": {
-            "agentFramework": bundle.framework,
+            "agentFramework": ENGINE_FRAMEWORKS[spec.framework] if spec else bundle.framework,
             "sourceCodeSpec": {
                 "inlineSource": {"sourceArchive": base64.b64encode(bundle.archive).decode("ascii")},
-                "pythonSpec": {"version": "3.12", "entrypointModule": bundle.entrypoint_module or data.module,
+                "pythonSpec": {"version": spec.runtime.python if spec else "3.12", "entrypointModule": bundle.entrypoint_module or data.module,
                                "entrypointObject": bundle.entrypoint_object,
                                "requirementsFile": bundle.requirements},
             },
@@ -581,6 +591,19 @@ def deployment_body(config: ConsoleConfig, data: DeploymentInput, bundle: Bundle
         ]
         body["spec"]["deploymentSpec"]["env"] = [
             {"name": "GOOGLE_GENAI_USE_VERTEXAI", "value": "true"}]
+    if spec:
+        # The AgentSpec sets resources, scaling, labels and non-secret environment variables.
+        resources = spec.runtime.resources
+        deployment = body["spec"]["deploymentSpec"]
+        deployment.update({"minInstances": resources.min_instances, "maxInstances": resources.max_instances,
+                           "resourceLimits": {"cpu": resources.cpu, "memory": resources.memory}})
+        env = {item["name"]: item["value"] for item in deployment.get("env", [])}
+        env.update(spec.runtime.env)
+        if env:
+            deployment["env"] = [{"name": name, "value": value} for name, value in env.items()]
+        body["labels"].update(spec.labels())
+        if spec.description:
+            body["description"] = spec.description
     return body
 
 
@@ -613,7 +636,7 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
                 del plans[key]
 
     def public_plan(plan):
-        return {key: value for key, value in plan.items() if key not in {"bundle", "input"}}
+        return {key: value for key, value in plan.items() if key not in {"bundle", "input", "spec"}}
 
     def run_sandbox_test(plan):
         data = plan["input"]
@@ -846,6 +869,24 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
                 if record is None:
                     raise HTTPException(400, "Upload expired; choose the ZIP again")
                 files = record[1]
+        spec, spec_name = None, ""
+        found = find_spec(files, data.subdirectory)
+        if found:
+            spec_name, raw = found
+            try:
+                spec = load_spec(raw)
+                problems = check_files(spec, files, data.subdirectory)
+            except AgentSpecError as error:
+                problems = error.errors
+            if problems:
+                raise HTTPException(400, f"{spec_name} is not valid AgentSpec: " + "; ".join(problems[:8]))
+            if spec.runtime.network == "private" and not config.attachment:
+                raise HTTPException(400, f"{spec_name} asks for runtime.network: private, but this console "
+                                         "has no network attachment configured (CONSOLE_NETWORK_ATTACHMENT)")
+            # The spec, not the form, decides how the agent is built.
+            data = data.model_copy(update={
+                "module": spec.entrypoint.module, "object_name": spec.entrypoint.object,
+                "requirements": spec.runtime.requirements, "framework": PACKAGING[spec.framework]})
         bundle = bundle_source(files, data.module, data.requirements, data.subdirectory,
                        data.framework, data.object_name)
         plan = {"id": secrets.token_urlsafe(18), "display_name": data.display_name,
@@ -862,9 +903,10 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
                     (f"Couldn't read the query() signature of {data.module}.{data.object_name} from its source, "
                      "so it is registered as query(message). Callers must send a 'message'.")]),
                 "class_methods": [dict(method) for method in bundle.class_methods],
+                "agentspec": spec.summary() if spec else None, "agentspec_file": spec_name,
                 "status_check": "",
                 "submitted_at": 0, "completed_at": 0, "logs_url": "",
-                "bundle": bundle, "input": data}
+                "bundle": bundle, "input": data, "spec": spec}
         with lock:
             if len(plans) >= 8:
                 raise HTTPException(429, "Console plan limit reached")
@@ -899,17 +941,26 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
             plan["status"] = "submitting"
             plan["approved_by"] = request.state.user
         try:
-            body = deployment_body(config, plan["input"], plan["bundle"])
+            body = deployment_body(config, plan["input"], plan["bundle"], plan["spec"])
             try:
                 operation = cloud.submit(body)
             except HTTPError as error:
-                # A 400 about the method schema read from source: deploy with query(message) instead.
+                # One retry with safe defaults when Google rejects a value read from the agent:
+                # its method schema (-> query(message)) or its framework label (-> custom).
                 code = error.response.status_code if error.response is not None else 0
-                if code != 400 or not plan["bundle"].methods_inferred or not re.search(
-                        r"class_?methods|parameters|schema", google_error(error), re.IGNORECASE):
+                reason = google_error(error)
+                schema_problem = plan["bundle"].methods_inferred and re.search(
+                    r"class_?methods|parameters|schema", reason, re.IGNORECASE)
+                framework_problem = body["spec"]["agentFramework"] not in {"custom", "google-adk"} and re.search(
+                    r"framework", reason, re.IGNORECASE)
+                if code != 400 or not (schema_problem or framework_problem):
                     raise
-                plan["bundle"] = dataclasses.replace(plan["bundle"], class_methods=(), methods_inferred=False)
-                operation = cloud.submit(deployment_body(config, plan["input"], plan["bundle"]))
+                if schema_problem:
+                    plan["bundle"] = dataclasses.replace(plan["bundle"], class_methods=(), methods_inferred=False)
+                body = deployment_body(config, plan["input"], plan["bundle"], plan["spec"])
+                if framework_problem:
+                    body["spec"]["agentFramework"] = "custom"
+                operation = cloud.submit(body)
             with lock:
                 plan["operation"] = operation["name"]
                 plan["status"] = "deploying"

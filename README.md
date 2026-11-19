@@ -9,6 +9,8 @@ Select a local folder, public GitHub repository at a pinned commit, or ZIP uploa
 review the immutable snapshot; then explicitly approve deployment to Agent Engine.
 Cloud submission is locked until the operator configures ADC and enables the approval gates.
 See [docs/console.md](docs/console.md) for the custom-agent contract, sample, and deployment setup.
+Agents describe themselves with an `agentspec.yaml` (owner, framework, models, tools, runtime,
+data classification, evaluation); see [docs/agentspec.md](docs/agentspec.md).
 
 An initial, security-focused implementation of the supplied Google Cloud architecture.
 Targets **itsai-mai-gcp-lab-proj / us-central1**, **Vertex AI Agent Engine**, and **Kong OSS**.
@@ -37,6 +39,9 @@ cost drivers and the approval checklist. **Do not deploy workloads until those g
 | `managed_agents/` | Policy broker API, Entra auth, registry policy, Agent Engine runtime, source bundler, deployment console |
 | `managed_agents/web/` | Console frontend (served at `/static`) |
 | `examples/source-agent/` | Minimal custom agent to deploy through the console |
+| `examples/adk-agent/` | Minimal Google ADK agent |
+| `data360agent/` | LangGraph + Gemini agent using the World Bank Data360 MCP server |
+| `schemas/` | AgentSpec JSON Schema (`agentspec-v1.json`) |
 | `registry/agents.json` | Agent/connector/model registry (disabled by default) |
 | `gateway/` | Kong OSS DB-less config and image |
 | `infra/` | Terraform foundation: VPC, PSC attachment, buckets, Artifact Registry, secrets, service accounts, optional Cloud Run gateway |

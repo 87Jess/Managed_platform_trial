@@ -4,7 +4,7 @@ steps:
     entrypoint: sh
     args:
       - -c
-      - pip install uv==0.13.4 && uv sync --frozen && uv run python -m pytest -q && uv run python -m ruff check .
+      - pip install uv==0.13.4 && uv sync --frozen && uv run python -m pytest -q && uv run python -m ruff check . && uv run python -m managed_agents.agentspec validate data360agent examples/source-agent examples/adk-agent
   - id: policy-image
     name: gcr.io/cloud-builders/docker
     args: [build, -t, '${_REGION}-docker.pkg.dev/$PROJECT_ID/managed-agents/policy:$BUILD_ID', .]
