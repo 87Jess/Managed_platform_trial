@@ -1,3 +1,3 @@
 {"question": "What is the GDP of India?", "expect": ["GDP", "India", "US$"], "expect_tools": true}
-{"question": "What was Kenya's population in 2022?", "expect": ["Kenya", "population", "2022"], "expect_tools": true}
+{"question": "What was Kenya's population in 2020?", "expect": ["Kenya", "population", "2020"], "expect_tools": true}
 {"question": "Hi! What can you do?", "expect": ["data"], "expect_tools": false}

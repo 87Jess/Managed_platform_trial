@@ -1,8 +1,8 @@
-# AgentSpec for the World Bank Data360 agent. Schema: schemas/agentspec-v1.json, rules: docs/agentspec.md
+# AgentSpec for the World Bank WDI agent. Schema: schemas/agentspec-v1.json, rules: docs/agentspec.md
 apiVersion: agentspec/v1
-name: data360-agent
+name: wdi-agent
 version: 1.0.0
-description: Answers questions using the World Bank Data360 REST API, with optional MCP support.
+description: Answers World Bank development data questions from the public WDI dataset in BigQuery.
 owner:
   name: Platform Team
   team: ITSAI AI-Platform
@@ -17,14 +17,10 @@ models:
     role: primary
   - id: gemini-3-flash-preview
     role: fallback
-tools:
-  mcp_servers:
-    - name: data360
-      url: https://maimcpext.worldbank.org/ext/data360/mcp
 runtime:
   python: "3.12"
   requirements: requirements.txt
-  network: public
+  network: public  # Google APIs only (Vertex AI, BigQuery); no internet egress needed
   telemetry: true
   resources:
     cpu: "1"
@@ -32,12 +28,10 @@ runtime:
     min_instances: 0
     max_instances: 2
   env:
-    DATA360_BACKEND: rest
-    DATA360_MODEL: gemini-2.5-flash
-    DATA360_FALLBACK_MODEL: gemini-3-flash-preview
-    DATA360_LOCATION: global
-    # Uncomment when the runtime has no direct internet route (VPC Service Controls / private network):
-    # DATA360_PROXY: http://10.10.0.5:3128
+    WDI_MODEL: gemini-2.5-flash
+    WDI_FALLBACK_MODEL: gemini-3-flash-preview
+    WDI_LOCATION: global
+    WDI_DATASET: bigquery-public-data.world_bank_wdi
 evaluation:
   suites:
     - name: golden-indicators

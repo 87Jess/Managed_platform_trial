@@ -40,7 +40,7 @@ cost drivers and the approval checklist. **Do not deploy workloads until those g
 | `managed_agents/web/` | Console frontend (served at `/static`) |
 | `examples/source-agent/` | Minimal custom agent to deploy through the console |
 | `examples/adk-agent/` | Minimal Google ADK agent |
-| `data360agent/` | LangGraph + Gemini agent using the World Bank Data360 MCP server |
+| `wdi_agent/` | LangGraph + Gemini agent answering World Bank data questions from BigQuery (no internet egress needed) |
 | `schemas/` | AgentSpec JSON Schema (`agentspec-v1.json`) |
 | `registry/agents.json` | Agent/connector/model registry (disabled by default) |
 | `gateway/` | Kong OSS DB-less config and image |

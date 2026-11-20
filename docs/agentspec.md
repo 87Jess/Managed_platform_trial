@@ -17,7 +17,7 @@ agent's folder as `agentspec.yaml`, next to the code, and records:
 The JSON Schema is [`schemas/agentspec-v1.json`](../schemas/agentspec-v1.json), generated from
 [`managed_agents/agentspec.py`](../managed_agents/agentspec.py). Reference specs:
 
-* [`data360agent/agentspec.yaml`](../data360agent/agentspec.yaml): LangGraph, Gemini, an MCP server and evaluation suites
+* [`wdi_agent/agentspec.yaml`](../wdi_agent/agentspec.yaml): LangGraph, Gemini, BigQuery and evaluation suites
 * [`examples/adk-agent/agentspec.yaml`](../examples/adk-agent/agentspec.yaml): Google ADK
 * [`examples/source-agent/agentspec.yaml`](../examples/source-agent/agentspec.yaml): minimal custom Python agent
 

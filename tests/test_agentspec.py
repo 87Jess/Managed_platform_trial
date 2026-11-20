@@ -11,7 +11,7 @@ from managed_agents.agentspec import AgentSpecError, check_files, load_spec
 from tests.test_console import approve, console, plan_for  # noqa: F401 (fixture)
 
 ROOT = Path(__file__).resolve().parents[1]
-REFERENCE_AGENTS = ["data360agent", "examples/source-agent", "examples/adk-agent"]
+REFERENCE_AGENTS = ["wdi_agent", "examples/source-agent", "examples/adk-agent"]
 
 MINIMAL = {
     "apiVersion": "agentspec/v1", "name": "demo-agent", "version": "1.2.3",

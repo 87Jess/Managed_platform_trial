@@ -6,7 +6,7 @@ if __name__ == "__main__" and not __package__:
 
 
 def main() -> None:
-    from data360agent.agent import root_agent
+    from wdi_agent.agent import root_agent
 
     history = []
     while True:
@@ -17,8 +17,8 @@ def main() -> None:
             continue
         result = root_agent.query(message=message, history=history)
         print("Agent:", result["reply"])
-        if result.get("tools_unavailable"):
-            print("Data360 warning:", result["tools_unavailable"])
+        if result.get("tools_used"):
+            print("  tools:", ", ".join(result["tools_used"]))
         history.extend([
             {"role": "user", "content": message},
             {"role": "assistant", "content": result["reply"]},
