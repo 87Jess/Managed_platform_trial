@@ -90,7 +90,7 @@ def test_plain_question_runs_tools_then_answers():
     final_prompt = model.seen[-1]
     assert final_prompt[0].type == "system"
     assert "3.9 trillion" in final_prompt[-1].content
-    assert {tool["function"]["name"] for tool in model.tools} == {"data360_search", "data360_get_data"}
+    assert {tool["function"]["name"] for tool in model.tools} == {"data360_search", "data360_get_data", "data360_calculate"}
 
 
 def test_json_commands_still_work_for_debugging():
@@ -187,7 +187,7 @@ def test_answers_even_when_the_data_server_is_unreachable():
     result = agent.query(message="GDP of India?")
     assert result["reply"].startswith("I can't reach")
     assert result["tools_unavailable"].startswith("ConnectError")
-    assert model.tools is None  # no tools bound
+    assert [tool["function"]["name"] for tool in model.tools] == ["data360_calculate"]  # calculator only
     assert "unavailable right now" in model.seen[0][0].content
 
 
@@ -230,3 +230,57 @@ def test_proxy_setting(monkeypatch):
     monkeypatch.setenv("DATA360_PROXY", "http://user:secret@proxy:3128")
     with pytest.raises(data360.MCPError, match="DATA360_PROXY"):
         data360.mcp_proxy()
+
+
+# ---------------------------------------------------------------- data360_calculate (local tool)
+
+@pytest.mark.parametrize(("arguments", "formatted"), [
+    ({"operation": "format", "a": 3956067115771.63, "unit": "US$"}, "3.96 trillion US$"),
+    ({"operation": "format", "a": 12345.5}, "12,345.5"),
+    ({"operation": "percent_change", "a": 3.6e12, "b": 3.956e12}, "+9.89%"),
+    ({"operation": "percent_change", "a": -50, "b": -25}, "+50.00%"),
+    ({"operation": "cagr", "a": 2.0e12, "b": 3.956e12, "start_year": 2015, "end_year": 2025}, "7.06% per year"),
+    ({"operation": "difference", "a": 1.2e9, "b": 1.45e9, "unit": "people"}, "250.00 million people"),
+    ({"operation": "ratio", "a": 3, "b": 4}, "0.750"),
+    ({"operation": "share", "a": 3.956e12, "b": 110e12}, "3.60%"),
+])
+def test_calculate(arguments, formatted):
+    assert data360.calculate(arguments)["formatted"] == formatted
+
+
+@pytest.mark.parametrize("arguments", [
+    {"operation": "sqrt", "a": 4},
+    {"operation": "ratio", "a": 1, "b": 0},
+    {"operation": "percent_change", "a": 0, "b": 5},
+    {"operation": "cagr", "a": 1, "b": 2, "start_year": 2020, "end_year": 2020},
+    {"operation": "cagr", "a": 1, "b": 2},
+    {"operation": "difference", "a": "10", "b": 2},
+    {"operation": "difference", "a": True, "b": 2},
+    {"operation": "format", "a": float("nan")},
+    {"operation": "format", "a": 1, "code": "import os"},
+])
+def test_calculate_rejects_bad_input(arguments):
+    with pytest.raises(data360.MCPError):
+        data360.calculate(arguments)
+
+
+def test_model_can_call_the_calculator():
+    model = ScriptedModel([
+        AIMessage(content="", tool_calls=[{"name": "data360_calculate", "id": "1", "args": {
+            "operation": "percent_change", "a": 3.6e12, "b": 3.956e12}}]),
+        AIMessage(content="India's GDP grew 9.89% from 2024 to 2025."),
+    ])
+    agent, client = agent_with(model)
+    result = agent.query(message="How much did India's GDP grow?")
+    assert result["tools_used"] == ["data360_calculate"]
+    assert client.calls == []  # computed locally, no data-server call
+    assert '"formatted": "+9.89%"' in model.seen[-1][-1].content
+
+
+def test_calculator_is_listed_and_callable_as_a_command():
+    agent, _ = agent_with(ScriptedModel([]))
+    names = [tool["name"] for tool in agent.query(message='{"action": "list_tools"}')["result"]["tools"]]
+    assert names[-1] == "data360_calculate"
+    called = agent.query(message=json.dumps({"action": "call_tool", "name": "data360_calculate",
+                                             "arguments": {"operation": "format", "a": 1.5e9}}))
+    assert called["result"]["structuredContent"]["formatted"] == "1.50 billion"

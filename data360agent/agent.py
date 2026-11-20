@@ -16,6 +16,7 @@ Credentials), so no API key or gateway token is needed. Configuration (all optio
 """
 
 import json
+import math
 import os
 import re
 import time
@@ -44,7 +45,9 @@ codes or sources; if the tools don't return the data, say so plainly. Prefer sea
 the right indicator first, then fetching its data. Give the number with its unit, the year
 and the source or indicator name, and keep answers short and friendly. If a question is
 ambiguous (which country, which year), ask one short clarifying question. You can greet
-people and explain what you can do without calling a tool."""
+people and explain what you can do without calling a tool. Never do arithmetic in your head:
+use data360_calculate for growth rates, CAGR, differences, ratios and shares, and to write
+large numbers readably (e.g. "3.96 trillion US$"), using only figures returned by the tools."""
 
 TOOLS_DOWN_NOTE = """
 
@@ -313,6 +316,93 @@ class Data360RESTClient:
         return {"structuredContent": {"source": url, "data": data}}
 
 
+# ---------------------------------------------------------------- local tools (no network)
+
+CALCULATE_TOOL = {
+    "name": "data360_calculate",
+    "description": (
+        "Exact arithmetic on figures returned by the Data360 tools. Operations: "
+        "percent_change (a to b), cagr (a in start_year to b in end_year, average annual growth), "
+        "difference (b - a), ratio (a / b), share (a as % of b), format (write a readably, "
+        "e.g. 3.96 trillion). Always use this instead of calculating yourself."),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "operation": {"type": "string", "enum": ["percent_change", "cagr", "difference",
+                                                     "ratio", "share", "format"]},
+            "a": {"type": "number", "description": "First value (the earlier or the part)"},
+            "b": {"type": "number", "description": "Second value (the later or the whole); not used by format"},
+            "start_year": {"type": "integer", "description": "Year of a (cagr only)"},
+            "end_year": {"type": "integer", "description": "Year of b (cagr only)"},
+            "unit": {"type": "string", "description": "Unit to append, e.g. US$ or people"},
+        },
+        "required": ["operation", "a"],
+    },
+}
+LOCAL_TOOLS = {CALCULATE_TOOL["name"]: CALCULATE_TOOL}
+_SCALES = ((1e12, "trillion"), (1e9, "billion"), (1e6, "million"))
+
+
+def readable(value: float, unit: str = "") -> str:
+    """3956067115771.63 -> '3.96 trillion'; below a million, plain digits with up to 2 decimals."""
+    size = abs(value)
+    if size >= 1e15:
+        text = f"{value:.3e}"
+    else:
+        text = next((f"{value / scale:,.2f} {word}" for scale, word in _SCALES if size >= scale),
+                    f"{value:,.2f}".rstrip("0").rstrip("."))
+    return f"{text} {unit}".strip()
+
+
+def calculate(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Run data360_calculate. Raises MCPError for bad input, which the model sees as a tool error."""
+    allowed = CALCULATE_TOOL["inputSchema"]["properties"].keys()
+    unknown = arguments.keys() - allowed
+    if unknown:
+        raise MCPError(f"Unknown arguments: {sorted(unknown)}")
+    operation, unit = arguments.get("operation"), arguments.get("unit", "")
+    if operation not in CALCULATE_TOOL["inputSchema"]["properties"]["operation"]["enum"]:
+        raise MCPError("operation must be one of percent_change, cagr, difference, ratio, share, format")
+    if not isinstance(unit, str) or len(unit) > 40:
+        raise MCPError("unit must be a short string")
+
+    def number(key: str) -> float:
+        value = arguments.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise MCPError(f"'{key}' must be a finite number")
+        return float(value)
+
+    a = number("a")
+    if operation == "format":
+        return {"operation": operation, "result": a, "formatted": readable(a, unit)}
+    b = number("b")
+    if operation in {"percent_change", "cagr", "ratio", "share"} and (b if operation in {"ratio", "share"} else a) == 0:
+        raise MCPError("Division by zero: the base value is 0")
+    if operation == "percent_change":
+        result = (b - a) / abs(a) * 100
+        formatted, explanation = f"{result:+.2f}%", f"({readable(b, unit)} - {readable(a, unit)}) / {readable(a, unit)}"
+    elif operation == "cagr":
+        start, end = arguments.get("start_year"), arguments.get("end_year")
+        if not (isinstance(start, int) and isinstance(end, int)) or isinstance(start, bool) or end <= start:
+            raise MCPError("cagr needs integer start_year < end_year")
+        if a < 0 or b < 0:
+            raise MCPError("cagr needs non-negative values")
+        result = ((b / a) ** (1 / (end - start)) - 1) * 100
+        formatted = f"{result:.2f}% per year"
+        explanation = f"({readable(b, unit)} / {readable(a, unit)})^(1/{end - start}) - 1, {start}-{end}"
+    elif operation == "difference":
+        result = b - a
+        formatted, explanation = readable(result, unit), f"{readable(b, unit)} - {readable(a, unit)}"
+    elif operation == "ratio":
+        result = a / b
+        formatted, explanation = f"{result:,.3f}", f"{readable(a, unit)} / {readable(b, unit)}"
+    else:  # share
+        result = a / b * 100
+        formatted, explanation = f"{result:.2f}%", f"{readable(a, unit)} as a share of {readable(b, unit)}"
+    return {"operation": operation, "result": round(result, 6), "formatted": formatted,
+            "explanation": explanation}
+
+
 def data360_client() -> Data360RESTClient | Data360MCPClient:
     backend = os.environ.get("DATA360_BACKEND", "rest").strip().lower()
     if backend == "rest":
@@ -510,9 +600,16 @@ class Data360Agent:
     # -- conversation -----------------------------------------------------------
     def _list_tools(self, client) -> dict[str, Any]:
         with self._span("data360.list_tools"):
-            return client.list_tools()
+            listed = client.list_tools()
+        tools = listed.get("tools") if isinstance(listed, dict) else None
+        if isinstance(tools, list):
+            listed = {**listed, "tools": [*tools, *(deepcopy(tool) for tool in LOCAL_TOOLS.values())]}
+        return listed
 
     def _call_tool(self, client, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if name in LOCAL_TOOLS:
+            with self._span("data360.calculate"):
+                return {"structuredContent": calculate(arguments)}
         with self._span("data360.call_tool"):
             return client.call_tool(name, arguments)
 
@@ -555,7 +652,8 @@ class Data360Agent:
             try:
                 definitions, names = gemini_tools(self._catalog(client))
             except (MCPError, httpx.HTTPError) as error:
-                definitions, names = [], {}
+                # Local tools (the calculator) still work without the data server.
+                definitions, names = gemini_tools(list(LOCAL_TOOLS.values()))
                 unavailable = f"{type(error).__name__}: {error}"[:300]
                 if isinstance(error, httpx.TransportError):
                     backend = os.environ.get("DATA360_BACKEND", "rest").strip().lower()

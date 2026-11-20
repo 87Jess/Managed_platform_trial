@@ -54,6 +54,24 @@ the runtime identity has the required exporter permissions. See Google's
 | `GOOGLE_CLOUD_PROJECT` | project of the credentials | Project billed for Gemini calls |
 | `DATA360_PROXY` | none | HTTP proxy for the Data360 server, e.g. `http://10.10.0.5:3128`, when the runtime has no direct internet route |
 
+## Calculator tool (`data360_calculate`)
+
+Besides the Data360 data tools, the agent has a local calculator so Gemini never does arithmetic
+in its head. It runs inside the agent (no network), so it still works when the data server is
+unreachable.
+
+| Operation | Computes | Example result |
+| --- | --- | --- |
+| `percent_change` | change from `a` to `b` | `+9.89%` |
+| `cagr` | average annual growth from `a` (`start_year`) to `b` (`end_year`) | `7.06% per year` |
+| `difference` | `b - a` | `250.00 million people` |
+| `ratio` | `a / b` | `0.750` |
+| `share` | `a` as a percentage of `b` | `3.60%` |
+| `format` | `a` written readably | `3.96 trillion US$` |
+
+Try it directly: `{"action": "call_tool", "name": "data360_calculate", "arguments": {"operation": "format", "a": 3956067115771.63, "unit": "US$"}}`.
+Ask the agent things like "How much did India's GDP grow between 2015 and 2024, per year?"
+
 ## Inputs
 
 * `query(message="What is the GDP of India?")` → `{"reply": ..., "tools_used": [...], "model": ...}`

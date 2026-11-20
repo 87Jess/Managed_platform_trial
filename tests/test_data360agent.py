@@ -149,7 +149,8 @@ class Data360MCPClientTests(unittest.TestCase):
         with patch("data360agent.agent.Data360MCPClient") as client_class:
             client_class.return_value.__enter__.return_value.list_tools.return_value = {"tools": []}
             result = Data360Agent(client_factory=client_class).query('{"action":"list_tools"}')
-        self.assertEqual(result, {"action": "list_tools", "result": {"tools": []}})
+        # Only the local calculator remains when the server lists no tools.
+        self.assertEqual([tool["name"] for tool in result["result"]["tools"]], ["data360_calculate"])
 
     def test_agent_rejects_malformed_json(self) -> None:
         with self.assertRaisesRegex(ValueError, "Malformed JSON"):

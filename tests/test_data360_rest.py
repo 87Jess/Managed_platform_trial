@@ -66,7 +66,7 @@ def test_rest_is_default_and_mcp_remains_selectable(monkeypatch):
     with data360_client() as client:
         assert isinstance(client, Data360RESTClient)
     response = Data360Agent().query('{"action":"list_tools"}')
-    assert len(response["result"]["tools"]) == 5
+    assert len(response["result"]["tools"]) == 6  # 5 REST tools + data360_calculate
 
     monkeypatch.setenv("DATA360_BACKEND", "mcp")
     with data360_client() as client:
