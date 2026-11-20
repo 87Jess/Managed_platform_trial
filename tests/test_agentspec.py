@@ -54,6 +54,7 @@ def test_minimal_spec_gets_safe_defaults():
     spec = load_spec(spec_with())
     assert spec.entrypoint.module == "agent" and spec.entrypoint.object == "root_agent"
     assert spec.runtime.python == "3.12" and spec.runtime.network == "public"
+    assert spec.runtime.telemetry is False
     assert spec.runtime.resources.max_instances == 2
     assert spec.labels()["agentspec-version"] == "1_2_3"
 
@@ -66,6 +67,7 @@ def test_minimal_spec_gets_safe_defaults():
     ({"framework": "crewai"}, "framework: Input should be"),
     ({"colour": "blue"}, "colour: Extra inputs are not permitted"),
     ({"runtime__env": {"OPENAI_API_KEY": "x"}}, "looks like a secret"),
+    ({"runtime__env": {"GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true"}}, "is reserved"),
     ({"runtime__resources": {"min_instances": 3, "max_instances": 1}}, "min_instances must not exceed"),
     ({"data_classification": "confidential"}, "confidential agents must use runtime.network: private"),
     ({"models": [{"id": "gemini-a"}, {"id": "gemini-b"}]}, "exactly one primary model"),
@@ -117,13 +119,16 @@ def write_agent(source, spec_text):
     (source / "agentspec.yaml").write_text(spec_text)
 
 
-def test_console_builds_the_agent_from_its_spec(console):  # noqa: F811
+@pytest.mark.parametrize("telemetry", [True, False])
+def test_console_builds_the_agent_from_its_spec(console, telemetry):  # noqa: F811
     client, cloud, source = console
     write_agent(source, spec_with(runtime={"python": "3.11", "env": {"MODE": "demo"},
+                                             "telemetry": telemetry,
                                              "resources": {"cpu": "2", "memory": "2Gi", "max_instances": 4}}))
     plan = plan_for(client, source)
     assert plan["agentspec"]["name"] == "demo-agent" and plan["agentspec_file"] == "agentspec.yaml"
     assert plan["agentspec"]["owner"]["team"] == "AI Platform"
+    assert plan["agentspec"]["telemetry"] is telemetry
     assert approve(client, plan).json()["status"] == "deploying"
     body = cloud.submissions[0]
     spec = body["spec"]
@@ -131,7 +136,10 @@ def test_console_builds_the_agent_from_its_spec(console):  # noqa: F811
     assert spec["sourceCodeSpec"]["pythonSpec"]["version"] == "3.11"
     assert spec["deploymentSpec"]["resourceLimits"] == {"cpu": "2", "memory": "2Gi"}
     assert spec["deploymentSpec"]["maxInstances"] == 4
-    assert {"name": "MODE", "value": "demo"} in spec["deploymentSpec"]["env"]
+    expected_env = {"MODE": "demo"}
+    if telemetry:
+        expected_env["GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY"] = "true"
+    assert {item["name"]: item["value"] for item in spec["deploymentSpec"]["env"]} == expected_env
     assert spec["classMethods"][0]["parameters"]["required"] == ["input"]
     assert body["labels"]["agentspec-name"] == "demo-agent"
     assert body["labels"]["data-class"] == "internal"

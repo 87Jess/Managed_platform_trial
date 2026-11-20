@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, model_validator
 
 API_VERSION = "agentspec/v1"
 # Accepted apiVersions. When v2 ships, v1 stays here for one deprecation period (see docs/agentspec.md).
@@ -91,6 +91,7 @@ class Runtime(Strict):
     network: Literal["public", "private"] = Field(
         default="public", description="private requires the platform's Private Service Connect attachment")
     env: dict[str, str] = Field(default_factory=dict, description="Non-secret environment variables only")
+    telemetry: StrictBool = Field(default=False, description="Enable managed Agent Runtime telemetry")
 
     @model_validator(mode="after")
     def no_secrets(self):
@@ -163,6 +164,7 @@ class AgentSpec(Strict):
                 "mcp_servers": [server.url for server in self.tools.mcp_servers],
                 "connectors": list(self.tools.connectors), "network": self.runtime.network,
                 "python": self.runtime.python, "resources": self.runtime.resources.model_dump(),
+                "telemetry": self.runtime.telemetry,
                 "evaluation": [f"{suite.name} ({suite.kind}, ≥{suite.threshold:.0%})"
                                for suite in self.evaluation.suites]}
 

@@ -69,6 +69,10 @@ Google Cloud. `runtime.network: private` is refused unless the console has a net
 configured. LangGraph and LangChain agents are packaged as Custom Python, with their framework recorded
 on the Agent Engine resource. Folders without a spec still deploy using the form, as before.
 
+Set `runtime.telemetry: true` to enable Google-managed Agent Runtime telemetry. It defaults
+to `false`; the console only sets the reserved Google telemetry flag for opted-in specs.
+This setting does not opt into GenAI prompt or response capture.
+
 Evaluation suites are declared and validated here. Running them in CI is a separate story
 (evaluation harness).
 

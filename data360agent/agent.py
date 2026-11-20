@@ -1,10 +1,10 @@
-"""World Bank Data360 agent: LangGraph + Gemini on Vertex AI, using the Data360 MCP tools.
+"""World Bank Data360 agent: LangGraph + Gemini with REST by default and optional MCP.
 
 Deploy with the console as framework "Custom Python", entrypoint module ``agent``,
 object ``root_agent``. Agent Engine calls ``query(message=...)``.
 
 * A plain-language message ("What is the GDP of India?") runs a LangGraph loop: Gemini
-  picks Data360 MCP tools, the graph calls them, and Gemini writes the answer.
+  picks Data360 tools, the graph calls them, and Gemini writes the answer.
 * A JSON command keeps the original debugging interface:
   ``{"action": "list_tools"}`` or ``{"action": "call_tool", "name": "...", "arguments": {}}``.
 
@@ -19,11 +19,18 @@ import json
 import os
 import re
 import time
-from typing import Any, Self
+from contextlib import contextmanager
+from copy import deepcopy
+from typing import TYPE_CHECKING, Any, Iterator, Self
 
 import httpx
 
+if TYPE_CHECKING:
+    from langchain_core.runnables import Runnable
+    from opentelemetry.trace import Tracer
+
 MCP_ENDPOINT = "https://maimcpext.worldbank.org/ext/data360/mcp"
+REST_ENDPOINT = "https://data360api.worldbank.org"
 MCP_PROTOCOL_VERSION = "2025-03-26"
 MAX_MESSAGE_LENGTH = 4000
 MAX_TOOL_STEPS = 8
@@ -46,7 +53,7 @@ greet people and explain what you can help with."""
 
 
 def mcp_proxy() -> str | None:
-    """Optional egress proxy for the MCP server (DATA360_PROXY), e.g. http://10.10.0.5:3128.
+    """Optional egress proxy for Data360 (DATA360_PROXY), e.g. http://10.10.0.5:3128.
 
     Needed when the runtime has no direct internet route (VPC Service Controls or private
     networking): traffic goes through a proxy in your VPC that allows the Data360 host.
@@ -184,6 +191,136 @@ class Data360MCPClient:
         return result
 
 
+def rest_tool(name: str, description: str, required: tuple[str, ...],
+              **parameters: str) -> dict[str, Any]:
+    return {
+        "name": f"data360_{name}",
+        "description": description,
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                key: {"type": "integer" if key in {"top", "skip"} else "string",
+                      "description": help_text}
+                for key, help_text in parameters.items()
+            },
+            "required": list(required),
+        },
+    }
+
+
+REST_OPERATIONS = {
+    "search_indicators": ("POST", "/data360/searchv2", rest_tool(
+        "search_indicators", "Find indicator names, IDs and database IDs by keyword.",
+        ("search",), search="Keywords for the indicator", top="Results to return (1-20)",
+        skip="Number of search results to skip",
+    )),
+    "get_data": ("GET", "/data360/data", rest_tool(
+        "get_data", "Fetch observations. Supply the indicator, country and years when known.",
+        ("DATABASE_ID",), DATABASE_ID="Database ID, e.g. WB_WDI",
+        INDICATOR="Full indicator ID from search", REF_AREA="Reference area code, e.g. IND",
+        TIME_PERIOD="Exact period, e.g. 2024", timePeriodFrom="Start of period range",
+        timePeriodTo="End of period range", SEX="Sex code", AGE="Age group code",
+        URBANISATION="Urbanisation code", COMP_BREAKDOWN_1="First indicator-specific breakdown",
+        COMP_BREAKDOWN_2="Second indicator-specific breakdown",
+        COMP_BREAKDOWN_3="Third indicator-specific breakdown", FREQ="Frequency code",
+        UNIT_MEASURE="Unit code", UNIT_TYPE="Unit type", UNIT_MULT="Unit multiplier",
+        skip="Records to skip; the API returns up to 1000 per page",
+    )),
+    "get_metadata": ("POST", "/data360/metadata", rest_tool(
+        "get_metadata", "Retrieve metadata for one indicator, including source and definition.",
+        ("indicatorId",), indicatorId="Full indicator ID from search",
+    )),
+    "get_disaggregation": ("GET", "/data360/disaggregation", rest_tool(
+        "get_disaggregation", "List available breakdowns for a dataset or indicator.",
+        ("datasetId",), datasetId="Dataset ID", indicatorId="Full indicator ID",
+    )),
+    "list_indicators": ("GET", "/data360/indicators", rest_tool(
+        "list_indicators", "List indicator IDs in a dataset.", ("datasetId",), datasetId="Dataset ID",
+    )),
+}
+
+
+class Data360RESTClient:
+    def __init__(self, http_client: httpx.Client | None = None) -> None:
+        self._owns_client = http_client is None
+        self._http = http_client or httpx.Client(timeout=30, follow_redirects=False, trust_env=False,
+                                                 proxy=mcp_proxy())
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        if self._owns_client:
+            self._http.close()
+
+    def list_tools(self) -> dict[str, Any]:
+        return {"tools": [deepcopy(tool) for _, _, tool in REST_OPERATIONS.values()]}
+
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        prefix, _, suffix = name.partition("_")
+        operation = REST_OPERATIONS.get(suffix) if prefix == "data360" else None
+        if operation is None:
+            raise MCPError(f"Unknown Data360 REST tool: {name!r}")
+        method, path, tool = operation
+        schema = tool["inputSchema"]
+        missing = set(schema["required"]) - arguments.keys()
+        unknown = arguments.keys() - schema["properties"].keys()
+        if missing or unknown:
+            raise MCPError(f"Invalid arguments: missing={sorted(missing)}, unknown={sorted(unknown)}")
+        for key, value in arguments.items():
+            if schema["properties"][key]["type"] == "integer":
+                bounds = (1, 20) if key == "top" else (0, 2147483647)
+                valid = type(value) is int and bounds[0] <= value <= bounds[1]
+            else:
+                valid = isinstance(value, str) and bool(value.strip()) and len(value) <= 500
+            if not valid:
+                raise MCPError(f"Invalid argument value for {key}")
+
+        if path == "/data360/searchv2":
+            body = {
+                "count": True,
+                "filter": "type eq 'indicator'",
+                "select": "series_description/idno,series_description/name,series_description/database_id",
+                "top": 5,
+                **arguments,
+            }
+        elif path == "/data360/metadata":
+            indicator = arguments["indicatorId"]
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", indicator):
+                raise MCPError("Invalid Data360 indicator ID")
+            body = {"query": f"&$filter=series_description/idno eq '{indicator}'"}
+        else:
+            body = None
+
+        url = REST_ENDPOINT + path
+        with self._http.stream(
+            method, url, params=arguments if method == "GET" else None, json=body,
+            headers={"Accept": "application/json"},
+        ) as response:
+            response.raise_for_status()
+            raw = bytearray()
+            for chunk in response.iter_bytes(chunk_size=65536):
+                raw.extend(chunk)
+                if len(raw) > 8 * 1024 * 1024:
+                    raise MCPError("Data360 REST response exceeds 8 MiB; narrow the request")
+        try:
+            data = json.loads(raw)
+        except (ValueError, UnicodeError) as error:
+            raise MCPError("Data360 REST returned invalid JSON") from error
+        if not isinstance(data, (dict, list)):
+            raise MCPError("Data360 REST returned an unexpected response")
+        return {"structuredContent": {"source": url, "data": data}}
+
+
+def data360_client() -> Data360RESTClient | Data360MCPClient:
+    backend = os.environ.get("DATA360_BACKEND", "rest").strip().lower()
+    if backend == "rest":
+        return Data360RESTClient()
+    if backend == "mcp":
+        return Data360MCPClient()
+    raise ValueError("DATA360_BACKEND must be 'rest' or 'mcp'")
+
+
 def network_diagnosis(url: str = MCP_ENDPOINT) -> str:
     """Where the MCP host resolves from inside the runtime: tells DNS, private-only and egress problems apart."""
     import ipaddress
@@ -293,11 +430,32 @@ def make_model(model_name: str):
 
 
 class Data360Agent:
-    def __init__(self, model_factory=make_model, client_factory=Data360MCPClient) -> None:
+    def __init__(self, model_factory=make_model, client_factory=data360_client, *,
+                 enable_tracing: bool = False) -> None:
         self.model_factory = model_factory
         self.client_factory = client_factory
-        self._tools: tuple[float, list[dict[str, Any]]] | None = None
+        self.enable_tracing = enable_tracing
+        self._tracer: Tracer | None = None
+        self._tools: dict[type, tuple[float, list[dict[str, Any]]]] = {}
         self._models: dict[str, Any] = {}
+
+    @contextmanager
+    def _span(self, name: str) -> Iterator[None]:
+        if not self.enable_tracing:
+            yield
+            return
+
+        from opentelemetry import trace
+
+        tracer = self._tracer or trace.get_tracer("data360agent")
+        with tracer.start_as_current_span(
+            name, record_exception=False, set_status_on_exception=False,
+        ) as span:
+            try:
+                yield
+            except Exception:
+                span.set_status(trace.StatusCode.ERROR)
+                raise
 
     def set_up(self) -> None:
         """Agent Engine calls this once per container. Keep it cheap: work happens lazily."""
@@ -313,10 +471,11 @@ class Data360Agent:
             raise ValueError("message must be a non-empty string")
         if len(message) > MAX_MESSAGE_LENGTH:
             raise ValueError(f"message is longer than {MAX_MESSAGE_LENGTH} characters")
-        command = self._command(message)
-        if command is not None:
-            return self._run_command(command)
-        return self._converse(message, history or [])
+        with self._span("data360.query"):
+            command = self._command(message)
+            if command is not None:
+                return self._run_command(command)
+            return self._converse(message, history or [])
 
     # -- JSON commands (debugging) --------------------------------------------
     @staticmethod
@@ -336,24 +495,34 @@ class Data360Agent:
         action = command.get("action")
         with self.client_factory() as client:
             if action == "list_tools":
-                return {"action": action, "result": client.list_tools()}
+                return {"action": action, "result": self._list_tools(client)}
             if action == "call_tool":
                 name, arguments = command.get("name"), command.get("arguments", {})
                 if not isinstance(name, str) or not name:
                     raise ValueError("call_tool requires a non-empty string 'name'")
                 if not isinstance(arguments, dict):
                     raise ValueError("'arguments' must be a JSON object")
-                return {"action": action, "name": name, "result": client.call_tool(name, arguments)}
+                return {"action": action, "name": name,
+                        "result": self._call_tool(client, name, arguments)}
         raise ValueError("Unsupported action; use 'list_tools' or 'call_tool', or just ask a question")
 
     # -- conversation -----------------------------------------------------------
+    def _list_tools(self, client) -> dict[str, Any]:
+        with self._span("data360.list_tools"):
+            return client.list_tools()
+
+    def _call_tool(self, client, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        with self._span("data360.call_tool"):
+            return client.call_tool(name, arguments)
+
     def _catalog(self, client) -> list[dict[str, Any]]:
-        if self._tools and time.monotonic() - self._tools[0] < TOOL_CACHE_SECONDS:
-            return self._tools[1]
-        tools = client.list_tools().get("tools")
+        cached = self._tools.get(type(client))
+        if cached and time.monotonic() - cached[0] < TOOL_CACHE_SECONDS:
+            return cached[1]
+        tools = self._list_tools(client).get("tools")
         if not isinstance(tools, list):
-            raise MCPError("Data360 MCP returned an invalid tool catalog")
-        self._tools = (time.monotonic(), tools)
+            raise MCPError("Data360 returned an invalid tool catalog")
+        self._tools[type(client)] = (time.monotonic(), tools)
         return tools
 
     def _model(self, name: str):
@@ -393,7 +562,8 @@ class Data360Agent:
             system = SYSTEM_PROMPT + (TOOLS_DOWN_NOTE if unavailable else "")
 
             def call_model(state: MessagesState):
-                return {"messages": [model.invoke([SystemMessage(system), *state["messages"]])]}
+                with self._span("data360.model"):
+                    return {"messages": [model.invoke([SystemMessage(system), *state["messages"]])]}
 
             def call_tools(state: MessagesState):
                 replies = []
@@ -403,7 +573,9 @@ class Data360Agent:
                         content = f"TOOL ERROR: unknown tool {call['name']!r}"
                     else:
                         try:
-                            content = tool_result_text(client.call_tool(mcp_name, call.get("args") or {}))
+                            content = tool_result_text(
+                                self._call_tool(client, mcp_name, call.get("args") or {})
+                            )
                             used.append(mcp_name)
                         except (MCPError, httpx.HTTPError) as error:
                             content = f"TOOL ERROR: {error}"
@@ -443,4 +615,59 @@ class Data360Agent:
         return result
 
 
-root_agent = Data360Agent()
+class VertexData360Agent(Data360Agent):
+    def __init__(self, *, enable_tracing: bool) -> None:
+        super().__init__(enable_tracing=enable_tracing)
+        self._sdk_runnable: Runnable[dict[str, Any], dict[str, Any]] | None = None
+
+    def query(self, message: str = "", user_id: str = "", history: list[dict[str, str]] | None = None,
+              **kwargs: Any) -> dict[str, Any]:
+        return super().query(message=message, user_id=user_id, history=history, **kwargs)
+
+    def _converse(self, message: str, history: list[dict[str, str]]) -> dict[str, Any]:
+        if self._sdk_runnable is None:
+            self._sdk_runnable = self._build_sdk_runnable()
+        return self._sdk_runnable.invoke({"message": message, "history": history})
+
+    def _build_sdk_runnable(self) -> "Runnable[dict[str, Any], dict[str, Any]]":
+        import vertexai
+        from langchain_core.runnables import RunnableLambda
+        from opentelemetry import trace
+        from vertexai.agent_engines import LangchainAgent
+
+        converse = super()._converse
+
+        def build_instrumentor(*, project_id: str) -> "Tracer":
+            # Keep the managed provider and avoid automatic payload capture.
+            self._tracer = trace.get_tracer("data360agent")
+            return self._tracer
+
+        runnable = None
+
+        def build_runnable(*, model, **_):
+            nonlocal runnable
+            runnable = RunnableLambda(lambda request: model(request["message"], request["history"]))
+            return runnable
+
+        project = default_project()
+        if project:
+            # The SDK implicitly sends even textual project IDs to Resource Manager.
+            vertexai.init(project=project)
+
+        wrapper = LangchainAgent(
+            model=os.environ.get("DATA360_MODEL", "gemini-2.5-flash"),
+            enable_tracing=self.enable_tracing,
+            # The existing graph owns lazy model selection and fallback.
+            model_builder=lambda **_: converse,
+            runnable_builder=build_runnable,
+            instrumentor_builder=build_instrumentor,
+        )
+        wrapper.set_up()
+        # SDK 1.144's query imports the legacy langchain.load serializer. The
+        # configured runnable already returns the JSON-compatible Data360 result.
+        if runnable is None:
+            raise RuntimeError("Vertex AI SDK did not build the Data360 runnable")
+        return runnable
+
+
+root_agent = VertexData360Agent(enable_tracing=True)

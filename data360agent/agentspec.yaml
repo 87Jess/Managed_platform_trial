@@ -2,7 +2,7 @@
 apiVersion: agentspec/v1
 name: data360-agent
 version: 1.0.0
-description: Answers questions about World Bank development data using the Data360 MCP tools.
+description: Answers questions using the World Bank Data360 REST API, with optional MCP support.
 owner:
   name: Platform Team
   team: ITSAI AI-Platform
@@ -25,12 +25,14 @@ runtime:
   python: "3.12"
   requirements: requirements.txt
   network: public
+  telemetry: true
   resources:
     cpu: "1"
     memory: 1Gi
     min_instances: 0
     max_instances: 2
   env:
+    DATA360_BACKEND: rest
     DATA360_MODEL: gemini-2.5-flash
     DATA360_FALLBACK_MODEL: gemini-3-flash-preview
     DATA360_LOCATION: global

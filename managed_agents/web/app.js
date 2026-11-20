@@ -255,6 +255,7 @@ function renderSpec(plan) {
     ["Models", spec.models.join(", ") || "None"],
     ["Tools", [...spec.mcp_servers.map((url) => `MCP ${new URL(url).host}`), ...spec.connectors].join(", ") || "None"],
     ["Runtime", `Python ${spec.python} · ${resources.cpu} CPU · ${resources.memory} · ${resources.min_instances}–${resources.max_instances} instances · ${spec.network} network`],
+    ["Telemetry", spec.telemetry ? "Enabled" : "Not requested"],
     ["Evaluation", spec.evaluation.join(", ") || "None declared"],
   ];
   byId("spec-fields").replaceChildren(...rows.map(([label, value]) => {

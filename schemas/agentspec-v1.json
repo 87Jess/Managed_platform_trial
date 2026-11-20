@@ -254,6 +254,12 @@
           "description": "Non-secret environment variables only",
           "title": "Env",
           "type": "object"
+        },
+        "telemetry": {
+          "default": false,
+          "description": "Enable managed Agent Runtime telemetry",
+          "title": "Telemetry",
+          "type": "boolean"
         }
       },
       "title": "Runtime",

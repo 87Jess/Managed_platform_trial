@@ -599,6 +599,8 @@ def deployment_body(config: ConsoleConfig, data: DeploymentInput, bundle: Bundle
                            "resourceLimits": {"cpu": resources.cpu, "memory": resources.memory}})
         env = {item["name"]: item["value"] for item in deployment.get("env", [])}
         env.update(spec.runtime.env)
+        if spec.runtime.telemetry:
+            env["GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY"] = "true"
         if env:
             deployment["env"] = [{"name": name, "value": value} for name, value in env.items()]
         body["labels"].update(spec.labels())
