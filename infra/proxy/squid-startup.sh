@@ -3,7 +3,7 @@
 # Allows HTTPS (CONNECT on port 443) only to the hosts listed in ALLOWED, and only from the
 # Agent Engine PSC subnet. Everything else is denied. Change ALLOWED / PSC_RANGE as needed.
 set -euo pipefail
-ALLOWED="maimcpext.worldbank.org"
+ALLOWED="data360api.worldbank.org maimcpext.worldbank.org"
 PSC_RANGE="10.10.1.0/28"
 
 if ! command -v squid >/dev/null; then

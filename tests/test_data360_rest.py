@@ -4,10 +4,10 @@ import httpx
 import pytest
 
 from data360agent.agent import (
-    MCPError,
     Data360Agent,
     Data360MCPClient,
     Data360RESTClient,
+    MCPError,
     data360_client,
 )
 
@@ -56,9 +56,9 @@ def test_rest_request(name, arguments, method, path, expected):
     ("https://example.org", {}),
 ])
 def test_rest_rejects_invalid_tool_arguments_before_network(name, arguments):
-    with httpx.Client(transport=httpx.MockTransport(lambda request: pytest.fail(str(request)))) as http:
-        with pytest.raises(MCPError):
-            Data360RESTClient(http).call_tool(name, arguments)
+    transport = httpx.MockTransport(lambda request: pytest.fail(str(request)))
+    with httpx.Client(transport=transport) as http, pytest.raises(MCPError):
+        Data360RESTClient(http).call_tool(name, arguments)
 
 
 def test_rest_is_default_and_mcp_remains_selectable(monkeypatch):

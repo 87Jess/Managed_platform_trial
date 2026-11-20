@@ -19,9 +19,10 @@ import json
 import os
 import re
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Iterator, Self
+from typing import TYPE_CHECKING, Any, Self
 
 import httpx
 
@@ -557,7 +558,8 @@ class Data360Agent:
                 definitions, names = [], {}
                 unavailable = f"{type(error).__name__}: {error}"[:300]
                 if isinstance(error, httpx.TransportError):
-                    unavailable += f" [{network_diagnosis()}]"
+                    backend = os.environ.get("DATA360_BACKEND", "rest").strip().lower()
+                    unavailable += f" [{network_diagnosis(REST_ENDPOINT if backend == 'rest' else MCP_ENDPOINT)}]"
             model = self._model(model_name).bind_tools(definitions) if definitions else self._model(model_name)
             system = SYSTEM_PROMPT + (TOOLS_DOWN_NOTE if unavailable else "")
 
