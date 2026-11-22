@@ -851,6 +851,43 @@ def test_invoke_agent_retries_a_refused_stream_and_reads_it_once(tmp_path, monke
     assert waits == [2.0]
 
 
+def unavailable():
+    response = http_response(400, "Reasoning Engine Execution failed. Error Details: Service Unavailable")
+    response._content = json.dumps({"error": {"code": 400, "status": "FAILED_PRECONDITION", "message":
+                                    "Reasoning Engine Execution failed. Error Details: Service Unavailable"}}).encode()
+    return response
+
+
+def test_invoke_agent_waits_for_an_agent_that_is_starting(tmp_path, monkeypatch):
+    ok = http_response(200, "")
+    ok._content = json.dumps({"output": {"output": "3.10 ends in October 2026"}}).encode()
+    cloud, session, waits = rate_limited_cloud(tmp_path, monkeypatch, [unavailable(), ok])
+    assert cloud.invoke_agent(AGENT, "query", {"message": "hi"}, False)["output"]["output"].startswith("3.10")
+    assert waits == [5.0]
+
+
+def test_invoke_agent_does_not_retry_failures_inside_the_agent(tmp_path, monkeypatch):
+    inside = http_response(400, "")
+    inside._content = json.dumps({"error": {"code": 400, "status": "FAILED_PRECONDITION", "message":
+                                  "Agent Engine Error: An error occurred during invocation. Exception: Service Unavailable"}}).encode()
+    cloud, session, waits = rate_limited_cloud(tmp_path, monkeypatch, [inside])
+    with pytest.raises(HTTPError):
+        cloud.invoke_agent(AGENT, "query", {"message": "hi"}, False)
+    assert session.post.call_count == 1 and waits == []
+
+
+def test_agent_test_explains_an_agent_that_is_not_running(console, monkeypatch):
+    client, cloud, _ = console
+    def down(*args):
+        raise HTTPError("detail", response=unavailable())
+    monkeypatch.setattr(cloud, "invoke_agent", down, raising=False)
+    response = client.post("/api/agents/test", json={"name": AGENT, "method": "query", "input": {"message": "hi"}})
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "isn't running yet" in detail and "Service Unavailable" in detail
+    assert "console.cloud.google.com/logs/query" in detail and "reasoning_engine_id%3D%2242%22" in detail
+
+
 def test_agent_test_explains_rate_limits(console, monkeypatch):
     client, cloud, _ = console
     def limited(*args):

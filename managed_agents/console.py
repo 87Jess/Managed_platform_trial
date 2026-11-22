@@ -376,23 +376,42 @@ class AgentEngineCloud:
             return response.json()
 
 
-# Waits before retrying a call Agent Engine refused with 429 before running the agent.
+# Waits before retrying a call Agent Engine refused before running the agent: a rate limit
+# clears in seconds, an agent starting from zero instances can take longer.
 RATE_LIMIT_BACKOFF = (2.0, 5.0)
+STARTING_BACKOFF = (5.0, 15.0)
+
+
+def _response_text(response) -> str:
+    try:
+        return response.text or ""
+    except Exception:
+        return ""
+
+
+def refusal_kind(response) -> str:
+    """Why Agent Engine's front door refused a call without running the agent, or "".
+
+    "rate_limited" is a 429; "unavailable" is Agent Engine having no running copy of the agent
+    ("Service Unavailable", sent as 400 FAILED_PRECONDITION or 503). Errors raised inside the
+    agent come back wrapped as "Agent Engine Error: An error occurred during invocation"; the
+    agent ran, so they are never treated as refusals and never retried.
+    """
+    status = getattr(response, "status_code", None)
+    if status not in (400, 429, 503):
+        return ""
+    text = _response_text(response)
+    if "Agent Engine Error" in text:
+        return ""
+    if status == 429:
+        return "rate_limited"
+    if status == 503 or ("FAILED_PRECONDITION" in text and "Service Unavailable" in text):
+        return "unavailable"
+    return ""
 
 
 def rejected_before_run(response) -> bool:
-    """True for a 429 from Agent Engine's front door: the agent never ran, so a retry is safe.
-
-    A 429 raised inside the agent (for example by its model) comes back wrapped as
-    "Agent Engine Error: An error occurred during invocation"; the agent ran, so it is not retried.
-    """
-    if getattr(response, "status_code", None) != 429:
-        return False
-    try:
-        text = response.text or ""
-    except Exception:
-        text = ""
-    return "Agent Engine Error" not in text
+    return bool(refusal_kind(response))
 
 
 def retry_delay(response, attempt: int) -> float:
@@ -403,7 +422,15 @@ def retry_delay(response, attempt: int) -> float:
             return value
     except (TypeError, ValueError):
         pass
-    return RATE_LIMIT_BACKOFF[min(attempt, len(RATE_LIMIT_BACKOFF) - 1)]
+    backoff = STARTING_BACKOFF if refusal_kind(response) == "unavailable" else RATE_LIMIT_BACKOFF
+    return backoff[min(attempt, len(backoff) - 1)]
+
+
+def logs_explorer_url(project: str, engine_id: str) -> str:
+    """Logs Explorer filtered to one Agent Engine resource's container output."""
+    query = (f'resource.type="aiplatform.googleapis.com/ReasoningEngine"\n'
+             f'resource.labels.reasoning_engine_id="{engine_id}"')
+    return f"https://console.cloud.google.com/logs/query;query={quote(query, safe='')}?project={project}"
 
 
 def read_events(response) -> list:
@@ -794,10 +821,7 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
         if not match:
             raise HTTPException(409, "This snapshot has not created an Agent Engine resource yet")
         engine_id = match.group(1)
-        query = (f'resource.type="aiplatform.googleapis.com/ReasoningEngine"\n'
-                 f'resource.labels.reasoning_engine_id="{engine_id}"')
-        explorer = (f"https://console.cloud.google.com/logs/query;query={quote(query, safe='')}"
-                    f"?project={config.project}")
+        explorer = logs_explorer_url(config.project, engine_id)
         try:
             lines = cloud.container_logs(engine_id, since)
         except GoogleAuthError:
@@ -819,10 +843,18 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
         except GoogleAuthError:
             raise HTTPException(502, "Google credentials are unavailable or expired") from None
         except HTTPError as error:
+            kind = refusal_kind(error.response) if error.response is not None else ""
+            if kind == "unavailable":
+                logs = logs_explorer_url(config.project, data.name.rsplit("/", 1)[-1])
+                raise HTTPException(503, (
+                    "The agent isn't running yet: Agent Engine had no started copy of it to answer "
+                    f"({google_error(error, limit=300)}). The console retried for about 20 seconds. "
+                    "An agent that was just deployed or has been idle can take a minute or two to start; "
+                    "send again. If it keeps failing, it is probably crashing while it starts "
+                    f"(a missing package, an error in set_up or at import). Its logs: {logs}")) from None
             if error.response is not None and error.response.status_code == 429:
                 where = ("Agent Engine refused the call (the console already retried it twice)"
-                         if rejected_before_run(error.response)
-                         else "The agent ran, but a Google service it called is rate-limited")
+                         if kind else "The agent ran, but a Google service it called is rate-limited")
                 raise HTTPException(429, (
                     f"{where}: {google_error(error, limit=600)}. Wait about a minute and send again. "
                     "If it keeps happening, check this project's Vertex AI quotas in Google Cloud "
