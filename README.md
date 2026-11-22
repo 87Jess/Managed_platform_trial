@@ -2,11 +2,15 @@
 
 ## Deployment Frontend
 
-Run `uv run python -m managed_agents.console` and open `http://127.0.0.1:8088`.
+Run `uv run python -m managed_agents.console` and open `http://127.0.0.1:8088`. For a demo
+deployment before the Terraform service account and network exist, add `--poc` (see
+[docs/console.md](docs/console.md#quick-poc-deployment)).
 Select a local folder, public GitHub repository at a pinned commit, or ZIP upload;
 review the immutable snapshot; then explicitly approve deployment to Agent Engine.
 Cloud submission is locked until the operator configures ADC and enables the approval gates.
 See [docs/console.md](docs/console.md) for the custom-agent contract, sample, and deployment setup.
+Agents describe themselves with an `agentspec.yaml` (owner, framework, models, tools, runtime,
+data classification, evaluation); see [docs/agentspec.md](docs/agentspec.md).
 
 An initial, security-focused implementation of the supplied Google Cloud architecture.
 Targets **itsai-mai-gcp-lab-proj / us-central1**, **Vertex AI Agent Engine**, and **Kong OSS**.
@@ -28,6 +32,40 @@ This is a tested foundation, not a complete production platform. Nothing has bee
 See [docs/deployment-plan.md](docs/deployment-plan.md) for missing architecture components,
 cost drivers and the approval checklist. **Do not deploy workloads until those gates are met.**
 
+## Repository Layout
+
+| Path | Contents |
+| --- | --- |
+| `managed_agents/` | Policy broker API, Entra auth, registry policy, Agent Engine runtime, source bundler, deployment console |
+| `managed_agents/web/` | Console frontend (served at `/static`) |
+| `examples/source-agent/` | Minimal custom agent to deploy through the console |
+| `examples/adk-agent/` | Minimal Google ADK agent |
+| `wdi_agent/` | LangGraph + Gemini agent answering World Bank data questions from BigQuery (no internet egress needed) |
+| `schemas/` | AgentSpec JSON Schema (`agentspec-v1.json`) |
+| `registry/agents.json` | Agent/connector/model registry (disabled by default) |
+| `gateway/` | Kong OSS DB-less config and image |
+| `infra/` | Terraform foundation: VPC, PSC attachment, buckets, Artifact Registry, secrets, service accounts, optional Cloud Run gateway |
+| `tests/` | Unit tests (no cloud credentials needed) |
+| `docs/` | Console guide and deployment plans |
+
+## Deploying an Agent to GCP
+
+1. Provision the foundation: `terraform -chdir=infra plan`, review, then apply after approval.
+2. Copy the Terraform outputs into your environment: `network_attachment` →
+   `CONSOLE_NETWORK_ATTACHMENT`, an `agent_service_accounts` entry → `CONSOLE_RUNTIME_ACCOUNT`.
+3. `gcloud auth application-default login`, then set `CONSOLE_ALLOW_DEPLOY=1` and
+   `CONSOLE_SECURITY_REVIEW_APPROVED=1` once the security gates are met.
+4. `uv run python -m managed_agents.console`, pick a folder / GitHub commit / ZIP,
+   review the snapshot, optionally **Test in GCP sandbox**, approve, and the console
+   creates the Agent Engine resource and tracks the operation until it completes.
+
+To host the console in GCP instead of running it locally, set `deploy_console = true` in
+Terraform: it runs on Cloud Run behind Identity-Aware Proxy and deploys with its own service
+account. See [docs/console.md](docs/console.md#hosted-console-cloud-run--iap).
+
+Sandbox testing runs the snapshot in an isolated Agent Engine code-execution sandbox
+before deployment; see [docs/console.md](docs/console.md#test-in-a-gcp-sandbox).
+
 ## Local Checks
 
 Python 3.12+ and `uv` are required:
@@ -41,8 +79,11 @@ uv run python -m ruff check .
 Windows application control can block generated launchers. Use
 `.\.venv\Scripts\python.exe -m pytest -q` rather than the `pytest.exe` launcher.
 
-To run the API, populate local environment variables using the names in
-[.env.example](.env.example). No development authentication bypass is provided.
+To run the API, set `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `ENTRA_TENANT_ID`,
+`ENTRA_AUDIENCE`, `APP_TOKEN_SHA256`, `REGISTRY_PATH`, `ENTRA_JWKS_PATH`, `HOST` and `PORT`
+(the console also reads `CONSOLE_PORT`, `CONSOLE_SOURCE_ROOT`, `CONSOLE_ALLOW_DEPLOY`,
+`CONSOLE_SECURITY_REVIEW_APPROVED`, `CONSOLE_RUNTIME_ACCOUNT` and `CONSOLE_NETWORK_ATTACHMENT`).
+No development authentication bypass is provided.
 Obtain your tenant's signing-key snapshot from
 `https://login.microsoftonline.com/TENANT_ID/discovery/v2.0/keys`, verify it through
 your identity-administration process, and place it at the configured `ENTRA_JWKS_PATH`.

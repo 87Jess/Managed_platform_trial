@@ -6,9 +6,9 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
+from google.auth.exceptions import GoogleAuthError
 from pydantic import Field, ValidationError
 from requests.exceptions import RequestException
-from google.auth.exceptions import GoogleAuthError
 
 from managed_agents.auth import AuthenticationFailed, EntraVerifier, Settings
 from managed_agents.backend import BackendUnavailable, GoogleBackend

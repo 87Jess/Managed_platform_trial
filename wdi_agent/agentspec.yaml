@@ -1,0 +1,44 @@
+# AgentSpec for the World Bank WDI agent. Schema: schemas/agentspec-v1.json, rules: docs/agentspec.md
+apiVersion: agentspec/v1
+name: wdi-agent
+version: 1.0.0
+description: Answers World Bank development data questions from the public WDI dataset in BigQuery.
+owner:
+  name: Platform Team
+  team: ITSAI AI-Platform
+  email: ai-platform@example.org
+framework: langgraph
+entrypoint:
+  module: agent
+  object: root_agent
+data_classification: public
+models:
+  - id: gemini-2.5-flash
+    role: primary
+  - id: gemini-3-flash-preview
+    role: fallback
+runtime:
+  python: "3.12"
+  requirements: requirements.txt
+  network: public  # Google APIs only (Vertex AI, BigQuery); no internet egress needed
+  telemetry: true
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    min_instances: 0
+    max_instances: 2
+  env:
+    WDI_MODEL: gemini-2.5-flash
+    WDI_FALLBACK_MODEL: gemini-3-flash-preview
+    WDI_LOCATION: global
+    WDI_DATASET: bigquery-public-data.world_bank_wdi
+evaluation:
+  suites:
+    - name: golden-indicators
+      kind: golden
+      dataset: evals/golden.jsonl
+      threshold: 0.8
+    - name: injection
+      kind: prompt_injection
+      dataset: evals/injection.jsonl
+      threshold: 1.0

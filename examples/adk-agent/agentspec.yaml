@@ -1,0 +1,17 @@
+apiVersion: agentspec/v1
+name: clock-agent
+version: 0.1.0
+description: Minimal ADK agent with one tool, the reference for framework adk.
+owner:
+  name: Platform Team
+  team: ITSAI AI-Platform
+  email: ai-platform@example.org
+framework: adk
+entrypoint:
+  module: agent
+  object: root_agent
+data_classification: public
+models:
+  - id: gemini-2.5-flash
+runtime:
+  requirements: requirements.txt
