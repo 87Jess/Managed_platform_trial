@@ -19,3 +19,6 @@ infra/.terraform/
 infra/*.tfstate*
 infra/*.tfplan
 infra/terraform.tfvars
+
+# Hallmark design-skill run records and screenshots (local only)
+.hallmark/
