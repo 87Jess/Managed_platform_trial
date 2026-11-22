@@ -15,6 +15,8 @@ function el(tag, className, text) { const node = document.createElement(tag); if
 function icon(name, spinning = false) { const node = document.createElement("i"); node.dataset.lucide = name; if (spinning) node.classList.add("spinning"); return node; }
 function icons() { if (globalThis.lucide) globalThis.lucide.createIcons(); }
 function setText(id, value) { byId(id).textContent = value; }
+// Long identifiers (service-account emails) may wrap after "@" and ".", never mid-word.
+function setBreakable(id, value) { const node = byId(id); node.replaceChildren(); String(value).split(/(?<=[@.])/).forEach((part, i) => { if (i) node.append(document.createElement("wbr")); node.append(part); }); }
 function readableBytes(value) { return value < 1024 ? `${value} B` : value < 1048576 ? `${(value / 1024).toFixed(1)} KiB` : `${(value / 1048576).toFixed(2)} MiB`; }
 function duration(seconds) { const s = Math.max(0, Math.round(seconds)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`; }
 function clock(seconds) { const s = Math.max(0, Math.floor(seconds)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
@@ -495,7 +497,7 @@ async function loadGarden(force = false) {
   } catch (error) {
     byId("garden-status").replaceChildren(alertBox("error", error.message));
     if (!garden.loaded) byId("garden-grid").replaceChildren();
-  } finally { garden.loading = false; byId("garden-refresh").disabled = false; if (garden.loaded) renderGarden(); icons(); }
+  } finally { garden.loading = false; byId("garden-refresh").disabled = false; byId("garden-stats").hidden = !garden.loaded; if (!garden.loaded) setText("garden-nav-count", ""); if (garden.loaded) renderGarden(); icons(); }
 }
 
 /* ---------- Test drawer ---------- */
@@ -688,7 +690,7 @@ function runPalette(index) { const item = palette.items[index]; if (!item) retur
 /* ---------- Environment ---------- */
 function renderEnvironment(config) {
   setText("target-project", config.project); setText("target-region", config.region);
-  setText("target-identity", config.runtime_account || "Agent Engine service agent");
+  setBreakable("target-identity", config.runtime_account || "Agent Engine service agent");
   setText("target-network", config.network_attachment ? `Private · ${config.network_attachment.split("/").pop()}` : "Public (no PSC attachment)");
   const deploys = el("span", "", config.deployment_enabled ? "Unlocked" : "Locked"); byId("submission-state").replaceChildren(el("span", `dot ${config.deployment_enabled ? "" : "warn"}`), deploys);
   const switches = [
