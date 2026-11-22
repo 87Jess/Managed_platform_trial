@@ -26,7 +26,7 @@ from google.auth.exceptions import GoogleAuthError
 from google.auth.transport import requests as google_requests
 from google.auth.transport.requests import AuthorizedSession
 from pydantic import Field
-from requests.exceptions import HTTPError, RequestException
+from requests.exceptions import HTTPError, RequestException, Timeout
 
 from managed_agents.agentspec import (
     ENGINE_FRAMEWORKS,
@@ -863,8 +863,21 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
                     "(IAM & Admin > Quotas) for Agent Engine queries and the agent's model.")) from None
             # Agents explain bad input in their error text, so keep enough of it to be useful.
             raise HTTPException(502, f"The agent call failed ({google_error(error, limit=2000)})") from None
-        except (RequestException, ValueError):
-            raise HTTPException(502, "Could not reach the agent; it may still be starting. Retry.") from None
+        except (RequestException, ValueError) as error:
+            # Full detail goes to the operator's terminal only; the browser gets the kind of failure.
+            print(f"Agent test call {data.method} on {data.name} failed: {type(error).__name__}: {error}",
+                  file=sys.stderr, flush=True)
+            logs = logs_explorer_url(config.project, data.name.rsplit("/", 1)[-1])
+            if isinstance(error, Timeout):
+                reason = ("Agent Engine didn't answer within 180 seconds. A first call that has to start the "
+                          "agent, or a slow model or tool call, can take that long. Send again")
+            elif isinstance(error, ValueError) and not isinstance(error, RequestException):
+                reason = "Agent Engine answered, but not with the JSON the console expects. Send again"
+            else:
+                reason = (f"The connection to Agent Engine failed or dropped before the reply finished "
+                          f"({type(error).__name__}). The agent may have stopped or restarted mid-reply. Send again")
+            raise HTTPException(502, (f"Could not get a reply from the agent ({data.method}). {reason}; "
+                                      f"if it keeps happening, check its logs: {logs}")) from None
         if data.mode == "stream":
             summary = summarize_events(result["events"])
             return {**summary, "events": result["events"][-50:], "event_count": len(result["events"])}

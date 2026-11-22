@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from google.auth.exceptions import DefaultCredentialsError
 from requests import Response
-from requests.exceptions import HTTPError, Timeout
+from requests.exceptions import ConnectionError, HTTPError, Timeout
 
 from managed_agents.console import AgentEngineCloud, ConsoleConfig, create_console
 from tests.test_sources import make_zip, uv_source
@@ -901,6 +901,26 @@ def test_agent_test_explains_an_agent_that_is_not_running(console, monkeypatch):
     detail = response.json()["detail"]
     assert "isn't running yet" in detail and "Service Unavailable" in detail
     assert "console.cloud.google.com/logs/query" in detail and "reasoning_engine_id%3D%2242%22" in detail
+
+
+@pytest.mark.parametrize("error, expected", [
+    (Timeout("secret-url timed out"), "didn't answer within 180 seconds"),
+    (ConnectionError("secret-url reset"), "failed or dropped before the reply finished (ConnectionError)"),
+    (ValueError("Expecting value: line 1"), "not with the JSON the console expects"),
+])
+def test_agent_test_says_why_the_agent_could_not_be_reached(console, monkeypatch, capsys, error, expected):
+    client, cloud, _ = console
+    def unreachable(*args):
+        raise error
+    monkeypatch.setattr(cloud, "invoke_agent", unreachable, raising=False)
+    response = client.post("/api/agents/test", json={"name": AGENT, "method": "async_stream_query",
+                                                     "mode": "stream", "input": {"message": "hi"}})
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert expected in detail and "(async_stream_query)" in detail
+    assert "console.cloud.google.com/logs/query" in detail
+    assert "secret-url" not in detail and "Expecting value" not in detail  # raw detail stays server-side
+    assert type(error).__name__ in capsys.readouterr().err
 
 
 def test_agent_test_explains_rate_limits(console, monkeypatch):
