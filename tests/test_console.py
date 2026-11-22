@@ -876,6 +876,21 @@ def test_invoke_agent_does_not_retry_failures_inside_the_agent(tmp_path, monkeyp
     assert session.post.call_count == 1 and waits == []
 
 
+def test_invoke_agent_keeps_the_error_of_a_stream_refused_every_time(tmp_path, monkeypatch):
+    def streamed():
+        # Like a real stream: the body can only be read until the response is closed.
+        response = unavailable()
+        response.raw = io.BytesIO(response._content)
+        response._content, response._content_consumed = False, False
+        return response
+    cloud, session, waits = rate_limited_cloud(tmp_path, monkeypatch, [streamed() for _ in range(3)])
+    with pytest.raises(HTTPError) as raised:
+        cloud.invoke_agent(AGENT, "async_stream_query", {"message": "hi"}, True)
+    from managed_agents.console import refusal_kind
+    assert refusal_kind(raised.value.response) == "unavailable"
+    assert waits == [5.0, 15.0]
+
+
 def test_agent_test_explains_an_agent_that_is_not_running(console, monkeypatch):
     client, cloud, _ = console
     def down(*args):

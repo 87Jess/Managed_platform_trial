@@ -335,6 +335,8 @@ class AgentEngineCloud:
                     if attempt < len(RATE_LIMIT_BACKOFF) and rejected_before_run(response):
                         delay = retry_delay(response, attempt)
                     else:
+                        if not response.ok:
+                            response.content  # keep Google's error text once the stream closes
                         response.raise_for_status()
                         return {"events": read_events(response)}
                 time.sleep(delay)
@@ -848,10 +850,10 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
                 logs = logs_explorer_url(config.project, data.name.rsplit("/", 1)[-1])
                 raise HTTPException(503, (
                     "The agent isn't running yet: Agent Engine had no started copy of it to answer "
-                    f"({google_error(error, limit=300)}). The console retried for about 20 seconds. "
+                    f"({google_error(error, limit=300)}). The console waited and retried twice. "
                     "An agent that was just deployed or has been idle can take a minute or two to start; "
                     "send again. If it keeps failing, it is probably crashing while it starts "
-                    f"(a missing package, an error in set_up or at import). Its logs: {logs}")) from None
+                    f"(a package it can't import, an error in set_up or at import). Its logs: {logs}")) from None
             if error.response is not None and error.response.status_code == 429:
                 where = ("Agent Engine refused the call (the console already retried it twice)"
                          if kind else "The agent ran, but a Google service it called is rate-limited")
