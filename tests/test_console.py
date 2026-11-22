@@ -791,6 +791,77 @@ def test_invoke_agent_uses_query_and_stream_query(tmp_path):
         cloud.invoke_agent("projects/x/locations/europe-west1/reasoningEngines/1", "query", {}, False)
 
 
+def http_response(code, message, headers=None):
+    """A real requests.Response that also works as the context manager a stream uses."""
+    response = Response()
+    response.status_code = code
+    response._content = json.dumps({"error": {"code": code, "message": message}}).encode()
+    response.headers.update(headers or {})
+    response.raw = MagicMock()  # closed when the stream's with-block exits
+    response.iter_lines = lambda decode_unicode=True: ['data: {"content": {"parts": [{"text": "Hi"}]}}']
+    return response
+
+
+def rate_limited_cloud(tmp_path, monkeypatch, responses):
+    from managed_agents import console as console_module
+
+    waits = []
+    monkeypatch.setattr(console_module.time, "sleep", waits.append)
+    session = MagicMock()
+    session.__enter__.return_value = session
+    session.post.side_effect = responses
+    cloud = AgentEngineCloud(ConsoleConfig(source_root=tmp_path, project="example-project"))
+    cloud.session = lambda: session
+    return cloud, session, waits
+
+
+def test_invoke_agent_retries_calls_agent_engine_refused(tmp_path, monkeypatch):
+    ok = http_response(200, "")
+    ok._content = json.dumps({"output": {"output": "answer"}}).encode()
+    cloud, session, waits = rate_limited_cloud(tmp_path, monkeypatch, [
+        http_response(429, "Rate exceeded.", {"Retry-After": "3"}), http_response(429, "Rate exceeded."), ok])
+    assert cloud.invoke_agent(AGENT, "query", {"message": "hi"}, False) == {"output": {"output": "answer"}}
+    assert session.post.call_count == 3
+    assert waits == [3.0, 5.0]
+
+
+def test_invoke_agent_gives_up_after_two_retries(tmp_path, monkeypatch):
+    cloud, session, waits = rate_limited_cloud(tmp_path, monkeypatch, [http_response(429, "Rate exceeded.")] * 3)
+    with pytest.raises(HTTPError):
+        cloud.invoke_agent(AGENT, "query", {"message": "hi"}, False)
+    assert session.post.call_count == 3
+    assert waits == [2.0, 5.0]
+
+
+def test_invoke_agent_does_not_rerun_an_agent_that_hit_a_limit_itself(tmp_path, monkeypatch):
+    inside = http_response(429, "Agent Engine Error: An error occurred during invocation. Exception: 429 RESOURCE_EXHAUSTED")
+    cloud, session, waits = rate_limited_cloud(tmp_path, monkeypatch, [inside])
+    with pytest.raises(HTTPError):
+        cloud.invoke_agent(AGENT, "query", {"message": "hi"}, False)
+    assert session.post.call_count == 1
+    assert waits == []
+
+
+def test_invoke_agent_retries_a_refused_stream_and_reads_it_once(tmp_path, monkeypatch):
+    cloud, session, waits = rate_limited_cloud(tmp_path, monkeypatch, [
+        http_response(429, "Rate exceeded."), http_response(200, "")])
+    result = cloud.invoke_agent(AGENT, "async_stream_query", {"message": "hi"}, True)
+    assert result == {"events": [{"content": {"parts": [{"text": "Hi"}]}}]}
+    assert session.post.call_count == 2
+    assert waits == [2.0]
+
+
+def test_agent_test_explains_rate_limits(console, monkeypatch):
+    client, cloud, _ = console
+    def limited(*args):
+        raise HTTPError("detail", response=http_response(429, "Rate exceeded."))
+    monkeypatch.setattr(cloud, "invoke_agent", limited, raising=False)
+    response = client.post("/api/agents/test", json={"name": AGENT, "method": "query", "input": {"message": "hi"}})
+    assert response.status_code == 429
+    detail = response.json()["detail"]
+    assert "Agent Engine refused the call" in detail and "Rate exceeded." in detail and "Quotas" in detail
+
+
 def test_cloud_session_reuses_credentials_and_resets_after_auth_errors(tmp_path, monkeypatch):
     from google.auth.exceptions import RefreshError
 

@@ -321,27 +321,23 @@ class AgentEngineCloud:
         body = {"classMethod": method, "input": payload}
         with self.session() as client:
             if not stream:
-                response = client.post(f"{base}:query", json=body, timeout=180)
-                response.raise_for_status()
-                return {"output": response.json().get("output")}
-            events, size = [], 0
-            with client.post(f"{base}:streamQuery?alt=sse", json=body, timeout=180,
-                             stream=True) as response:
-                response.raise_for_status()
-                for raw in response.iter_lines(decode_unicode=True):
-                    line = (raw or "").strip()
-                    if line.startswith("data:"):
-                        line = line[5:].strip()
-                    if not line:
+                for attempt in range(len(RATE_LIMIT_BACKOFF) + 1):
+                    response = client.post(f"{base}:query", json=body, timeout=180)
+                    if attempt < len(RATE_LIMIT_BACKOFF) and rejected_before_run(response):
+                        time.sleep(retry_delay(response, attempt))
                         continue
-                    size += len(line)
-                    if size > 400_000 or len(events) >= 300:
-                        break
-                    try:
-                        events.append(json.loads(line))
-                    except ValueError:
-                        events.append(line)
-            return {"events": events}
+                    response.raise_for_status()
+                    return {"output": response.json().get("output")}
+            for attempt in range(len(RATE_LIMIT_BACKOFF) + 1):
+                delay = None
+                with client.post(f"{base}:streamQuery?alt=sse", json=body, timeout=180,
+                                 stream=True) as response:
+                    if attempt < len(RATE_LIMIT_BACKOFF) and rejected_before_run(response):
+                        delay = retry_delay(response, attempt)
+                    else:
+                        response.raise_for_status()
+                        return {"events": read_events(response)}
+                time.sleep(delay)
 
     def list_agents(self, max_pages: int = 5):
         """Agent Engine resources in the project and region (the console's Agent Platform runtimes)."""
@@ -378,6 +374,55 @@ class AgentEngineCloud:
                 f"https://{self.config.region}-aiplatform.googleapis.com/v1/{name}", timeout=20)
             response.raise_for_status()
             return response.json()
+
+
+# Waits before retrying a call Agent Engine refused with 429 before running the agent.
+RATE_LIMIT_BACKOFF = (2.0, 5.0)
+
+
+def rejected_before_run(response) -> bool:
+    """True for a 429 from Agent Engine's front door: the agent never ran, so a retry is safe.
+
+    A 429 raised inside the agent (for example by its model) comes back wrapped as
+    "Agent Engine Error: An error occurred during invocation"; the agent ran, so it is not retried.
+    """
+    if getattr(response, "status_code", None) != 429:
+        return False
+    try:
+        text = response.text or ""
+    except Exception:
+        text = ""
+    return "Agent Engine Error" not in text
+
+
+def retry_delay(response, attempt: int) -> float:
+    """Seconds to wait: Google's Retry-After when it is a small number, otherwise the backoff."""
+    try:
+        value = float((getattr(response, "headers", None) or {}).get("Retry-After", ""))
+        if 0 < value <= 30:
+            return value
+    except (TypeError, ValueError):
+        pass
+    return RATE_LIMIT_BACKOFF[min(attempt, len(RATE_LIMIT_BACKOFF) - 1)]
+
+
+def read_events(response) -> list:
+    """Server-sent events from a streamQuery response, bounded in count and size."""
+    events, size = [], 0
+    for raw in response.iter_lines(decode_unicode=True):
+        line = (raw or "").strip()
+        if line.startswith("data:"):
+            line = line[5:].strip()
+        if not line:
+            continue
+        size += len(line)
+        if size > 400_000 or len(events) >= 300:
+            break
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            events.append(line)
+    return events
 
 
 def google_error(error: HTTPError, limit: int = 400) -> str:
@@ -774,6 +819,14 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
         except GoogleAuthError:
             raise HTTPException(502, "Google credentials are unavailable or expired") from None
         except HTTPError as error:
+            if error.response is not None and error.response.status_code == 429:
+                where = ("Agent Engine refused the call (the console already retried it twice)"
+                         if rejected_before_run(error.response)
+                         else "The agent ran, but a Google service it called is rate-limited")
+                raise HTTPException(429, (
+                    f"{where}: {google_error(error, limit=600)}. Wait about a minute and send again. "
+                    "If it keeps happening, check this project's Vertex AI quotas in Google Cloud "
+                    "(IAM & Admin > Quotas) for Agent Engine queries and the agent's model.")) from None
             # Agents explain bad input in their error text, so keep enough of it to be useful.
             raise HTTPException(502, f"The agent call failed ({google_error(error, limit=2000)})") from None
         except (RequestException, ValueError):
