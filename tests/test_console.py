@@ -861,7 +861,7 @@ def unavailable():
 def test_invoke_agent_waits_for_an_agent_that_is_starting(tmp_path, monkeypatch):
     ok = http_response(200, "")
     ok._content = json.dumps({"output": {"output": "3.10 ends in October 2026"}}).encode()
-    cloud, session, waits = rate_limited_cloud(tmp_path, monkeypatch, [unavailable(), ok])
+    cloud, _session, waits = rate_limited_cloud(tmp_path, monkeypatch, [unavailable(), ok])
     assert cloud.invoke_agent(AGENT, "query", {"message": "hi"}, False)["output"]["output"].startswith("3.10")
     assert waits == [5.0]
 
@@ -883,7 +883,7 @@ def test_invoke_agent_keeps_the_error_of_a_stream_refused_every_time(tmp_path, m
         response.raw = io.BytesIO(response._content)
         response._content, response._content_consumed = False, False
         return response
-    cloud, session, waits = rate_limited_cloud(tmp_path, monkeypatch, [streamed() for _ in range(3)])
+    cloud, _session, waits = rate_limited_cloud(tmp_path, monkeypatch, [streamed() for _ in range(3)])
     with pytest.raises(HTTPError) as raised:
         cloud.invoke_agent(AGENT, "async_stream_query", {"message": "hi"}, True)
     from managed_agents.console import refusal_kind

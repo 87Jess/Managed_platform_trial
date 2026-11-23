@@ -266,6 +266,18 @@ class AgentEngineCloud:
             response.raise_for_status()
             return response.json()
 
+    def update(self, name: str, body: dict, update_mask: list[str]):
+        """Patch an existing Agent Engine resource in place; returns its long-running operation."""
+        pattern = r"projects/[a-z0-9-]+/locations/" + re.escape(self.config.region) + r"/reasoningEngines/[0-9]+"
+        if not re.fullmatch(pattern, name):
+            raise SourceError("Unexpected agent resource name")
+        with self.session() as client:
+            response = client.patch(
+                f"https://{self.config.region}-aiplatform.googleapis.com/v1/{name}",
+                params={"updateMask": ",".join(update_mask)}, json=body, timeout=60)
+            response.raise_for_status()
+            return response.json()
+
     def sandbox_test(self, bundle: Bundle, module: str, object_name: str, framework: str):
         runner = SandboxRunner(self.session, self.config.region, self.config.sandbox_engine)
         return runner.run(bundle.archive, bundle.digest, module, object_name, framework)
@@ -336,7 +348,7 @@ class AgentEngineCloud:
                         delay = retry_delay(response, attempt)
                     else:
                         if not response.ok:
-                            response.content  # keep Google's error text once the stream closes
+                            _ = response.content  # keep Google's error text once the stream closes
                         response.raise_for_status()
                         return {"events": read_events(response)}
                 time.sleep(delay)
@@ -387,7 +399,7 @@ STARTING_BACKOFF = (5.0, 15.0)
 def _response_text(response) -> str:
     try:
         return response.text or ""
-    except Exception:
+    except (RequestException, ValueError, AttributeError, RuntimeError):
         return ""
 
 

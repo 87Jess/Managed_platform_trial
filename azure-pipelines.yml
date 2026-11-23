@@ -1,0 +1,123 @@
+# Azure DevOps pipeline: CI checks on every PR and push, then deploy AgentSpec agents to
+# Vertex AI Agent Engine (Agent Runtime) from main, after an approval on the environment.
+# Google Cloud sign-in uses workload identity federation: no keys are stored anywhere.
+# One-time setup (Google Cloud and Azure DevOps): docs/ado-pipeline.md
+
+trigger:
+  branches:
+    include: [main]
+pr:
+  branches:
+    include: [main]
+
+parameters:
+  - name: agents
+    displayName: Agent folders to deploy (each needs agentspec.yaml)
+    type: object
+    default:
+      - examples/source-agent
+  - name: smokeMessage
+    displayName: Message sent to each agent after it deploys (empty = skip)
+    type: string
+    default: "Hello from the Azure DevOps pipeline"
+  - name: serviceConnection
+    displayName: Azure Resource Manager service connection (workload identity federation)
+    type: string
+    default: google-cloud
+
+variables:
+  # GCP_PROJECT_ID, GCP_PROJECT_NUMBER, GCP_REGION, WIF_POOL_ID, WIF_PROVIDER_ID, GCP_DEPLOYER_SA
+  # and optionally AGENT_RUNTIME_ACCOUNT / AGENT_NETWORK_ATTACHMENT ("default" / "none" for demo mode).
+  - group: gcp-agent-runtime
+  - name: UV_VERSION
+    value: "0.13.4"
+
+stages:
+  - stage: CI
+    displayName: Test and package
+    jobs:
+      - job: checks
+        displayName: Tests, lint, AgentSpec, packaging
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "3.12"
+          - script: python -m pip install --quiet "uv==$(UV_VERSION)" && uv sync --frozen
+            displayName: Install dependencies
+          - script: uv run python -m pytest -q --junitxml=$(Agent.TempDirectory)/test-results.xml
+            displayName: Unit tests
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFiles: $(Agent.TempDirectory)/test-results.xml
+              testRunTitle: Python tests
+          - script: uv run python -m ruff check .
+            displayName: Lint
+          - script: uv run python -m managed_agents.agentspec validate wdi_agent examples/source-agent examples/adk-agent
+            displayName: Validate AgentSpecs
+          - ${{ each agent in parameters.agents }}:
+              - script: uv run python -m managed_agents.pipeline plan "${{ agent }}"
+                displayName: Package ${{ agent }} (offline)
+
+  - stage: Deploy
+    displayName: Deploy to Agent Engine
+    dependsOn: CI
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: agent_runtime
+        displayName: Deploy agents
+        pool:
+          vmImage: ubuntu-latest
+        # Add an "Approvals" check to this environment in Azure DevOps so deploys wait for a reviewer.
+        environment: gcp-agent-runtime
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - task: UsePythonVersion@0
+                  inputs:
+                    versionSpec: "3.12"
+                - script: python -m pip install --quiet "uv==$(UV_VERSION)" && uv sync --frozen
+                  displayName: Install dependencies
+                - task: AzureCLI@2
+                  displayName: Sign in to Google Cloud and deploy
+                  inputs:
+                    azureSubscription: ${{ parameters.serviceConnection }}
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    addSpnToEnvironment: true   # exposes the federated ID token as $idToken
+                    inlineScript: |
+                      set -euo pipefail
+                      for name in GCP_PROJECT_ID GCP_PROJECT_NUMBER GCP_REGION WIF_POOL_ID WIF_PROVIDER_ID GCP_DEPLOYER_SA; do
+                        if [ -z "${!name:-}" ]; then echo "##vso[task.logissue type=error]$name is not set in the gcp-agent-runtime variable group"; exit 1; fi
+                      done
+
+                      # Exchange the Azure DevOps ID token for Google credentials (workload identity federation).
+                      token_file="$AGENT_TEMPDIRECTORY/ado-oidc.jwt"
+                      cred_file="$AGENT_TEMPDIRECTORY/gcp-wif.json"
+                      trap 'rm -f "$token_file" "$cred_file"' EXIT
+                      umask 077
+                      printf '%s' "$idToken" > "$token_file"
+                      cat > "$cred_file" <<JSON
+                      {
+                        "type": "external_account",
+                        "audience": "//iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WIF_POOL_ID}/providers/${WIF_PROVIDER_ID}",
+                        "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                        "token_url": "https://sts.googleapis.com/v1/token",
+                        "credential_source": {"file": "${token_file}"},
+                        "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${GCP_DEPLOYER_SA}:generateAccessToken"
+                      }
+                      JSON
+                      export GOOGLE_APPLICATION_CREDENTIALS="$cred_file"
+                      export GOOGLE_CLOUD_PROJECT="$GCP_PROJECT_ID" GOOGLE_CLOUD_LOCATION="$GCP_REGION"
+
+                      for agent in $AGENT_FOLDERS; do
+                        uv run python -m managed_agents.pipeline deploy "$agent" --smoke-message "$SMOKE_MESSAGE"
+                      done
+                  env:
+                    AGENT_FOLDERS: ${{ join(' ', parameters.agents) }}
+                    SMOKE_MESSAGE: ${{ parameters.smokeMessage }}
