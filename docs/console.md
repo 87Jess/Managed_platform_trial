@@ -125,6 +125,12 @@ button. It opens a chat panel that calls the deployed agent through the Vertex A
   `{message}` is replaced with what you type.
 
 Messages go to the live agent in Google Cloud, which may call models and tools and incur cost.
+If Agent Engine refuses a call with HTTP 429 before the agent runs ("Rate exceeded"), the console waits
+(Google's `Retry-After`, otherwise 2 s then 5 s) and retries up to twice. A 429 raised inside the agent,
+for example by its model, is not retried, because the agent already ran; the panel says which one happened.
+Likewise, "Service Unavailable" (Agent Engine has no started copy of the agent, often right after a deploy
+or when it scales up from zero) is retried after 5 s and 15 s. If it persists, the panel links the agent's
+logs in Logs Explorer, since the usual cause is the agent failing while it starts.
 The caller needs `aiplatform.reasoningEngines.query` (included in `roles/aiplatform.user`).
 
 ## Quick PoC Deployment

@@ -26,7 +26,7 @@ from google.auth.exceptions import GoogleAuthError
 from google.auth.transport import requests as google_requests
 from google.auth.transport.requests import AuthorizedSession
 from pydantic import Field
-from requests.exceptions import HTTPError, RequestException
+from requests.exceptions import HTTPError, RequestException, Timeout
 
 from managed_agents.agentspec import (
     ENGINE_FRAMEWORKS,
@@ -321,27 +321,25 @@ class AgentEngineCloud:
         body = {"classMethod": method, "input": payload}
         with self.session() as client:
             if not stream:
-                response = client.post(f"{base}:query", json=body, timeout=180)
-                response.raise_for_status()
-                return {"output": response.json().get("output")}
-            events, size = [], 0
-            with client.post(f"{base}:streamQuery?alt=sse", json=body, timeout=180,
-                             stream=True) as response:
-                response.raise_for_status()
-                for raw in response.iter_lines(decode_unicode=True):
-                    line = (raw or "").strip()
-                    if line.startswith("data:"):
-                        line = line[5:].strip()
-                    if not line:
+                for attempt in range(len(RATE_LIMIT_BACKOFF) + 1):
+                    response = client.post(f"{base}:query", json=body, timeout=180)
+                    if attempt < len(RATE_LIMIT_BACKOFF) and rejected_before_run(response):
+                        time.sleep(retry_delay(response, attempt))
                         continue
-                    size += len(line)
-                    if size > 400_000 or len(events) >= 300:
-                        break
-                    try:
-                        events.append(json.loads(line))
-                    except ValueError:
-                        events.append(line)
-            return {"events": events}
+                    response.raise_for_status()
+                    return {"output": response.json().get("output")}
+            for attempt in range(len(RATE_LIMIT_BACKOFF) + 1):
+                delay = None
+                with client.post(f"{base}:streamQuery?alt=sse", json=body, timeout=180,
+                                 stream=True) as response:
+                    if attempt < len(RATE_LIMIT_BACKOFF) and rejected_before_run(response):
+                        delay = retry_delay(response, attempt)
+                    else:
+                        if not response.ok:
+                            response.content  # keep Google's error text once the stream closes
+                        response.raise_for_status()
+                        return {"events": read_events(response)}
+                time.sleep(delay)
 
     def list_agents(self, max_pages: int = 5):
         """Agent Engine resources in the project and region (the console's Agent Platform runtimes)."""
@@ -378,6 +376,82 @@ class AgentEngineCloud:
                 f"https://{self.config.region}-aiplatform.googleapis.com/v1/{name}", timeout=20)
             response.raise_for_status()
             return response.json()
+
+
+# Waits before retrying a call Agent Engine refused before running the agent: a rate limit
+# clears in seconds, an agent starting from zero instances can take longer.
+RATE_LIMIT_BACKOFF = (2.0, 5.0)
+STARTING_BACKOFF = (5.0, 15.0)
+
+
+def _response_text(response) -> str:
+    try:
+        return response.text or ""
+    except Exception:
+        return ""
+
+
+def refusal_kind(response) -> str:
+    """Why Agent Engine's front door refused a call without running the agent, or "".
+
+    "rate_limited" is a 429; "unavailable" is Agent Engine having no running copy of the agent
+    ("Service Unavailable", sent as 400 FAILED_PRECONDITION or 503). Errors raised inside the
+    agent come back wrapped as "Agent Engine Error: An error occurred during invocation"; the
+    agent ran, so they are never treated as refusals and never retried.
+    """
+    status = getattr(response, "status_code", None)
+    if status not in (400, 429, 503):
+        return ""
+    text = _response_text(response)
+    if "Agent Engine Error" in text:
+        return ""
+    if status == 429:
+        return "rate_limited"
+    if status == 503 or ("FAILED_PRECONDITION" in text and "Service Unavailable" in text):
+        return "unavailable"
+    return ""
+
+
+def rejected_before_run(response) -> bool:
+    return bool(refusal_kind(response))
+
+
+def retry_delay(response, attempt: int) -> float:
+    """Seconds to wait: Google's Retry-After when it is a small number, otherwise the backoff."""
+    try:
+        value = float((getattr(response, "headers", None) or {}).get("Retry-After", ""))
+        if 0 < value <= 30:
+            return value
+    except (TypeError, ValueError):
+        pass
+    backoff = STARTING_BACKOFF if refusal_kind(response) == "unavailable" else RATE_LIMIT_BACKOFF
+    return backoff[min(attempt, len(backoff) - 1)]
+
+
+def logs_explorer_url(project: str, engine_id: str) -> str:
+    """Logs Explorer filtered to one Agent Engine resource's container output."""
+    query = (f'resource.type="aiplatform.googleapis.com/ReasoningEngine"\n'
+             f'resource.labels.reasoning_engine_id="{engine_id}"')
+    return f"https://console.cloud.google.com/logs/query;query={quote(query, safe='')}?project={project}"
+
+
+def read_events(response) -> list:
+    """Server-sent events from a streamQuery response, bounded in count and size."""
+    events, size = [], 0
+    for raw in response.iter_lines(decode_unicode=True):
+        line = (raw or "").strip()
+        if line.startswith("data:"):
+            line = line[5:].strip()
+        if not line:
+            continue
+        size += len(line)
+        if size > 400_000 or len(events) >= 300:
+            break
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            events.append(line)
+    return events
 
 
 def google_error(error: HTTPError, limit: int = 400) -> str:
@@ -749,10 +823,7 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
         if not match:
             raise HTTPException(409, "This snapshot has not created an Agent Engine resource yet")
         engine_id = match.group(1)
-        query = (f'resource.type="aiplatform.googleapis.com/ReasoningEngine"\n'
-                 f'resource.labels.reasoning_engine_id="{engine_id}"')
-        explorer = (f"https://console.cloud.google.com/logs/query;query={quote(query, safe='')}"
-                    f"?project={config.project}")
+        explorer = logs_explorer_url(config.project, engine_id)
         try:
             lines = cloud.container_logs(engine_id, since)
         except GoogleAuthError:
@@ -774,10 +845,39 @@ def create_console(config: ConsoleConfig | None = None, *, cloud=None,
         except GoogleAuthError:
             raise HTTPException(502, "Google credentials are unavailable or expired") from None
         except HTTPError as error:
+            kind = refusal_kind(error.response) if error.response is not None else ""
+            if kind == "unavailable":
+                logs = logs_explorer_url(config.project, data.name.rsplit("/", 1)[-1])
+                raise HTTPException(503, (
+                    "The agent isn't running yet: Agent Engine had no started copy of it to answer "
+                    f"({google_error(error, limit=300)}). The console waited and retried twice. "
+                    "An agent that was just deployed or has been idle can take a minute or two to start; "
+                    "send again. If it keeps failing, it is probably crashing while it starts "
+                    f"(a package it can't import, an error in set_up or at import). Its logs: {logs}")) from None
+            if error.response is not None and error.response.status_code == 429:
+                where = ("Agent Engine refused the call (the console already retried it twice)"
+                         if kind else "The agent ran, but a Google service it called is rate-limited")
+                raise HTTPException(429, (
+                    f"{where}: {google_error(error, limit=600)}. Wait about a minute and send again. "
+                    "If it keeps happening, check this project's Vertex AI quotas in Google Cloud "
+                    "(IAM & Admin > Quotas) for Agent Engine queries and the agent's model.")) from None
             # Agents explain bad input in their error text, so keep enough of it to be useful.
             raise HTTPException(502, f"The agent call failed ({google_error(error, limit=2000)})") from None
-        except (RequestException, ValueError):
-            raise HTTPException(502, "Could not reach the agent; it may still be starting. Retry.") from None
+        except (RequestException, ValueError) as error:
+            # Full detail goes to the operator's terminal only; the browser gets the kind of failure.
+            print(f"Agent test call {data.method} on {data.name} failed: {type(error).__name__}: {error}",
+                  file=sys.stderr, flush=True)
+            logs = logs_explorer_url(config.project, data.name.rsplit("/", 1)[-1])
+            if isinstance(error, Timeout):
+                reason = ("Agent Engine didn't answer within 180 seconds. A first call that has to start the "
+                          "agent, or a slow model or tool call, can take that long. Send again")
+            elif isinstance(error, ValueError) and not isinstance(error, RequestException):
+                reason = "Agent Engine answered, but not with the JSON the console expects. Send again"
+            else:
+                reason = (f"The connection to Agent Engine failed or dropped before the reply finished "
+                          f"({type(error).__name__}). The agent may have stopped or restarted mid-reply. Send again")
+            raise HTTPException(502, (f"Could not get a reply from the agent ({data.method}). {reason}; "
+                                      f"if it keeps happening, check its logs: {logs}")) from None
         if data.mode == "stream":
             summary = summarize_events(result["events"])
             return {**summary, "events": result["events"][-50:], "event_count": len(result["events"])}
