@@ -1,0 +1,2 @@
+google-cloud-aiplatform[agent_engines,langchain]>=1.112.0,<2.0.0
+python-dotenv>=1.0.1,<2.0.0
