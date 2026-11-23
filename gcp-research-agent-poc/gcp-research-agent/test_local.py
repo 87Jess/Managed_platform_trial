@@ -1,7 +1,7 @@
 """Run a local smoke test. Requires ADC credentials and project configuration."""
 
-from dotenv import load_dotenv
 from agent import build_agent
+from dotenv import load_dotenv
 
 load_dotenv()
 

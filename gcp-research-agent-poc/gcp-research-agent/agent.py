@@ -1,8 +1,9 @@
 """Single-agent LangChain research agent using Gemini + Google Search grounding."""
 
 import os
-from dotenv import load_dotenv
+
 import vertexai
+from dotenv import load_dotenv
 from vertexai import agent_engines
 from vertexai.generative_models import Tool, grounding
 

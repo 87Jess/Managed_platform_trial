@@ -1,10 +1,10 @@
 """Deploy the LangChain research agent to Gemini Enterprise Agent Runtime."""
 
 import os
-from dotenv import load_dotenv
-import vertexai
 
+import vertexai
 from agent import build_agent
+from dotenv import load_dotenv
 
 load_dotenv()
 
