@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="console-token" content="__CONSOLE_TOKEN__">
   <meta name="color-scheme" content="light">
+  <meta name="description" content="Local console for reviewing, packaging and deploying Python agents to Google Cloud Agent Engine.">
   <title>Agent Platform</title>
   <link rel="icon" href="/static/cloud.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css">
@@ -25,7 +26,7 @@
       <nav class="nav" aria-label="Console">
         <a class="nav-pill" href="#deploy" data-view="deploy">Ship</a>
         <a class="nav-pill" href="#history" data-view="history">Deployments <span class="count" id="history-count">0</span></a>
-        <a class="nav-pill" href="#agents" data-view="agents">Agent garden <span class="count" id="garden-nav-count">–</span></a>
+        <a class="nav-pill" href="#agents" data-view="agents">Agent garden <span class="count" id="garden-nav-count">…</span></a>
         <a class="nav-pill" href="#environment" data-view="environment">Environment</a>
       </nav>
       <a class="project-pill" href="#environment" title="Deployment target">
@@ -38,7 +39,7 @@
     <!-- Ship -->
     <section class="view" id="view-deploy" data-view="deploy">
       <div class="page-head">
-        <h1><strong>Ship an agent.</strong> <span class="serif">Pick your code, check the exact snapshot, and send it to Agent Engine — usually live in a few minutes.</span></h1>
+        <div class="page-title"><h1>Ship an agent.</h1><p class="lede serif">Pick your code, check the exact snapshot, and send it to Agent Engine (usually live in a few minutes).</p></div>
         <button id="new-button" class="btn ghost press" type="button">Start fresh</button>
       </div>
       <div id="notice" class="alert error" role="alert" hidden></div>
@@ -49,9 +50,9 @@
             <fieldset class="step">
               <legend>1 · Your code</legend>
               <div class="source-picker" role="radiogroup" aria-label="Code source">
-                <label class="source-option"><input type="radio" name="source-kind" value="local" checked><span class="source-card press"><span class="tile orange"><i data-lucide="folder"></i></span><span class="source-text"><strong>Local folder</strong><small>On this computer</small></span></span></label>
-                <label class="source-option"><input type="radio" name="source-kind" value="github"><span class="source-card press"><span class="tile ink"><i data-lucide="github"></i></span><span class="source-text"><strong>GitHub</strong><small>Public repo at a commit</small></span></span></label>
-                <label class="source-option"><input type="radio" name="source-kind" value="zip"><span class="source-card press"><span class="tile violet"><i data-lucide="file-archive"></i></span><span class="source-text"><strong>ZIP upload</strong><small>Up to 8 MiB</small></span></span></label>
+                <label class="source-option"><input type="radio" name="source-kind" value="local" checked><span class="source-choice press"><span class="tile orange"><i data-lucide="folder"></i></span><span class="source-text"><strong>Local folder</strong><small>On this computer</small></span></span></label>
+                <label class="source-option"><input type="radio" name="source-kind" value="github"><span class="source-choice press"><span class="tile ink"><i data-lucide="github"></i></span><span class="source-text"><strong>GitHub</strong><small>Public repo at a commit</small></span></span></label>
+                <label class="source-option"><input type="radio" name="source-kind" value="zip"><span class="source-choice press"><span class="tile violet"><i data-lucide="file-archive"></i></span><span class="source-text"><strong>ZIP upload</strong><small>Up to 8 MiB</small></span></span></label>
               </div>
               <div id="local-fields" class="source-fields">
                 <label class="field"><span class="label">Folder path</span><input id="local-path" name="local-path" type="text" spellcheck="false" autocomplete="off" required placeholder="C:\projects\my-agent"></label>
@@ -97,7 +98,7 @@
           </div>
           <div id="review-content" hidden>
             <div class="review-head">
-              <span class="avatar lg" id="review-avatar">?</span>
+              <span class="avatar lg" id="review-avatar" aria-hidden="true"></span>
               <div class="review-title-block"><h2 id="snapshot-name"></h2><span class="meta">snapshot <code id="review-digest"></code><button class="icon-button" id="copy-digest" type="button" title="Copy full SHA-256" aria-label="Copy full SHA-256"><i data-lucide="copy"></i></button></span></div>
               <span id="review-badge" class="pill neutral">No snapshot</span>
             </div>
@@ -156,7 +157,7 @@
     <!-- Deployments -->
     <section class="view" id="view-history" data-view="history" hidden>
       <div class="page-head">
-        <h1><strong>Deployments.</strong> <span class="serif">Everything you've reviewed and shipped from this console, this session.</span></h1>
+        <div class="page-title"><h1>Deployments.</h1><p class="lede serif">Everything you’ve reviewed and shipped from this console, this session.</p></div>
         <div class="row"><button class="icon-button" type="button" id="refresh-history" title="Refresh" aria-label="Refresh deployments"><i data-lucide="refresh-cw"></i></button><a class="btn primary press" href="#deploy">Ship another</a></div>
       </div>
       <dl class="stats">
@@ -166,17 +167,17 @@
         <div><dd id="stat-failed" class="red">0</dd><dt>need a fix</dt></div>
       </dl>
       <div id="history-body" class="list"></div>
-      <p class="footnote">This list lasts for this console session. Your agents keep living in Google Cloud — find them all in the <a href="#agents">Agent garden</a> or <a id="history-cloud-link" target="_blank" rel="noreferrer">Google Cloud ↗</a>.</p>
+      <p class="footnote">This list lasts for this console session. Your agents keep living in Google Cloud. Find them all in the <a href="#agents">Agent garden</a> or <a id="history-cloud-link" target="_blank" rel="noreferrer">Google Cloud ↗</a>.</p>
     </section>
 
     <!-- Agent garden -->
     <section class="view" id="view-agents" data-view="agents" hidden>
       <div class="page-head">
-        <h1><strong>Agent garden.</strong> <span class="serif">Everything growing on Agent Platform in <span id="garden-scope">this project</span>, yours and your teammates'.</span></h1>
-        <dl class="stats compact">
-          <div><dd id="garden-total">–</dd><dt>agents</dt></div>
-          <div><dd id="garden-live" class="green">–</dd><dt>with code deployed</dt></div>
-          <div><dd id="garden-attention" class="blue">–</dd><dt>from this console</dt></div>
+        <div class="page-title"><h1>Agent garden.</h1><p class="lede serif">Everything growing on Agent Platform in <span id="garden-scope">this project</span>, yours and your teammates’.</p></div>
+        <dl class="stats compact" id="garden-stats">
+          <div><dd id="garden-total">…</dd><dt>agents</dt></div>
+          <div><dd id="garden-live" class="green">…</dd><dt>with code deployed</dt></div>
+          <div><dd id="garden-attention" class="blue">…</dd><dt>from this console</dt></div>
         </dl>
       </div>
       <div class="garden-layout">
@@ -204,7 +205,7 @@
     <!-- Environment -->
     <section class="view" id="view-environment" data-view="environment" hidden>
       <div class="page-head">
-        <h1><strong>Environment.</strong> <span class="serif">Where your agents land, who they run as, and the switches that keep deploys safe.</span></h1>
+        <div class="page-title"><h1>Environment.</h1><p class="lede serif">Where your agents land, who they run as, and the switches that keep deploys safe.</p></div>
         <button id="check-cloud" class="btn primary press" type="button">Run a health check</button>
       </div>
       <section class="card pad" aria-labelledby="target-title">
@@ -220,7 +221,7 @@
       </section>
       <section class="card pad" aria-labelledby="switches-title">
         <h2 id="switches-title" class="card-title">Switches</h2>
-        <p class="meta">Set these before starting the console, then restart it. Shown here so you always know what's on.</p>
+        <p class="meta">Set these before starting the console, then restart it. Shown here so you always know what’s on.</p>
         <ul id="switch-list" class="switches"></ul>
       </section>
       <section class="card pad" aria-labelledby="config-title">
@@ -239,7 +240,7 @@
 
   <dialog id="test-drawer" class="drawer" aria-labelledby="test-title">
     <div class="drawer-head">
-      <span class="avatar lg" id="test-avatar">?</span>
+      <span class="avatar lg" id="test-avatar" aria-hidden="true"></span>
       <div class="drawer-title"><h2 id="test-title">Agent</h2><span id="test-info" class="meta"></span><code id="test-resource" class="sr-only"></code></div>
       <button class="btn small soft press" id="test-new-session" type="button">New chat</button>
       <button class="icon-button" id="test-close" type="button" aria-label="Close" title="Close"><i data-lucide="x"></i></button>
@@ -255,7 +256,7 @@
       <div class="row-between meta"><span>Enter to send · Shift+Enter for a new line</span>
         <details class="advanced"><summary>Method &amp; input</summary>
           <div class="grid-2"><label class="field"><span class="label">Class method</span><select id="test-method"></select></label><label class="field"><span class="label">Call</span><select id="test-mode"><option value="query">Query</option><option value="stream">Stream query</option></select></label></div>
-          <label class="field"><span class="label">Input JSON — <code>{message}</code> becomes your text</span><textarea id="test-input" rows="4" spellcheck="false"></textarea></label>
+          <label class="field"><span class="label">Input JSON: <code>{message}</code> becomes your text</span><textarea id="test-input" rows="4" spellcheck="false"></textarea></label>
           <details class="schema"><summary>What this method accepts</summary><pre id="test-schema" class="terminal light"></pre></details>
         </details>
       </div>

@@ -15,6 +15,8 @@ function el(tag, className, text) { const node = document.createElement(tag); if
 function icon(name, spinning = false) { const node = document.createElement("i"); node.dataset.lucide = name; if (spinning) node.classList.add("spinning"); return node; }
 function icons() { if (globalThis.lucide) globalThis.lucide.createIcons(); }
 function setText(id, value) { byId(id).textContent = value; }
+// Long identifiers (service-account emails) may wrap after "@" and ".", never mid-word.
+function setBreakable(id, value) { const node = byId(id); node.replaceChildren(); for (const part of String(value).split(/([@.])/)) { if (!part) continue; node.append(part); if (part === "@" || part === ".") node.append(document.createElement("wbr")); } }
 function readableBytes(value) { return value < 1024 ? `${value} B` : value < 1048576 ? `${(value / 1024).toFixed(1)} KiB` : `${(value / 1048576).toFixed(2)} MiB`; }
 function duration(seconds) { const s = Math.max(0, Math.round(seconds)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`; }
 function clock(seconds) { const s = Math.max(0, Math.floor(seconds)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
@@ -42,7 +44,9 @@ async function api(path, options = {}) {
   const data = await response.json();
   if (!response.ok) {
     const detail = Array.isArray(data.detail) ? data.detail.map((entry) => `${entry.loc.at(-1)}: ${entry.msg}`).join("; ") : data.detail;
-    throw new Error(detail || `Request failed (${response.status})`);
+    const failure = new Error(detail || `Request failed (${response.status})`);
+    failure.status = response.status;
+    throw failure;
   }
   return data;
 }
@@ -495,7 +499,7 @@ async function loadGarden(force = false) {
   } catch (error) {
     byId("garden-status").replaceChildren(alertBox("error", error.message));
     if (!garden.loaded) byId("garden-grid").replaceChildren();
-  } finally { garden.loading = false; byId("garden-refresh").disabled = false; if (garden.loaded) renderGarden(); icons(); }
+  } finally { garden.loading = false; byId("garden-refresh").disabled = false; byId("garden-stats").hidden = !garden.loaded; if (!garden.loaded) setText("garden-nav-count", ""); if (garden.loaded) renderGarden(); icons(); }
 }
 
 /* ---------- Test drawer ---------- */
@@ -555,9 +559,20 @@ function testInfo() {
   if (tester.session) parts.push(`session ${tester.session.slice(0, 8)}…`);
   setText("test-info", parts.join(" · "));
 }
+// Text with any Google Cloud console links made clickable (they open in a new tab).
+function linkedText(text) {
+  const paragraph = el("p");
+  for (const part of String(text).split(/(https:\/\/console\.cloud\.google\.com\/\S+)/)) {
+    if (!part) continue;
+    if (!part.startsWith("https://console.cloud.google.com/")) { paragraph.append(part); continue; }
+    const link = el("a", "", "Open the agent's logs in Google Cloud"); link.href = part; link.target = "_blank"; link.rel = "noopener noreferrer";
+    paragraph.append(link);
+  }
+  return paragraph;
+}
 function bubble(kind, text) {
   const item = el("div", `bubble ${kind}`);
-  if (text !== undefined) item.append(el("p", "", text));
+  if (text !== undefined) item.append(linkedText(text));
   byId("test-transcript").append(item); byId("test-transcript").scrollTop = byId("test-transcript").scrollHeight;
   return item;
 }
@@ -688,7 +703,7 @@ function runPalette(index) { const item = palette.items[index]; if (!item) retur
 /* ---------- Environment ---------- */
 function renderEnvironment(config) {
   setText("target-project", config.project); setText("target-region", config.region);
-  setText("target-identity", config.runtime_account || "Agent Engine service agent");
+  setBreakable("target-identity", config.runtime_account || "Agent Engine service agent");
   setText("target-network", config.network_attachment ? `Private · ${config.network_attachment.split("/").pop()}` : "Public (no PSC attachment)");
   const deploys = el("span", "", config.deployment_enabled ? "Unlocked" : "Locked"); byId("submission-state").replaceChildren(el("span", `dot ${config.deployment_enabled ? "" : "warn"}`), deploys);
   const switches = [
@@ -860,12 +875,13 @@ byId("test-form").addEventListener("submit", async (event) => {
     footer.append(raw); reply.append(footer); icons();
   } catch (error) {
     typing.remove(); bubble("error", error.message);
-    const examples = examplesFromError(error.message);
+    const refused = error.status === 429 || error.status === 503;
+    const examples = refused ? [] : examplesFromError(error.message);
     if (examples.length) {
       setSuggestions(examples.map(exampleChip));
       bubble("system", "This agent expects structured input, not a chat message. Pick one of its own examples below to try it.");
     }
-    if (!examples.length && /Send JSON|INVALID_ARGUMENT|missing|required|unexpected keyword|argument/i.test(error.message)) {
+    if (!refused && !examples.length && /Send JSON|INVALID_ARGUMENT|missing|required|unexpected keyword|argument/i.test(error.message)) {
       byId("test-form").querySelector(".advanced").open = true;
       bubble("system", "The agent didn't accept that input. Its expected input is under “Method & input”: adjust the JSON (your text replaces {message}) and send again.");
     }
